@@ -64,10 +64,14 @@ hypotheses and their verdicts) is in [`results/versions.md`](results/versions.md
 ├── src/
 │   ├── pipeline.py            # full pipeline (features, models, mixture, submission)
 │   └── stacking_experiment.py # out-of-fold residual corrector (kept: +0.7 s, documented)
+├── notebooks/
+│   ├── 01_eda_corruption.ipynb   # figures: off-block bias, substitution rate, MSE anatomy
+│   └── 02_ablations.ipynb        # figures: version history, local-vs-public calibration
 ├── results/
 │   └── versions.md            # experiment log v2 → v17
 ├── paper/
 │   └── outline.md
+├── LICENSE
 └── data/                      # not versioned; see below
 ```
 
@@ -103,7 +107,8 @@ python reproduce.py
 ```
 
 First run: ~20–40 min (feature computation is cached in `data/`), then
-~10–15 min per run. Outputs land in `submissions/` following the
+~10–15 min per run. The notebooks in `notebooks/` regenerate the paper's
+figures from those caches (run `reproduce.py` once first). Outputs land in `submissions/` following the
 `<team>_v<k>.parquet` naming convention. The script prints the temporal
 validation (train: Feb–Jun + Aug–Dec 2025; validation: Jan + Jul 2025,
 mimicking the ranking's seasonality), per-airport RMSE, and feature
