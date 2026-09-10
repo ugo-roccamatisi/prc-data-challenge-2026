@@ -1,111 +1,142 @@
-# PRC Data Challenge 2026 : journal des tentatives et résultats
+# PRC Data Challenge 2026: experiment log
 
-Équipe `motivated-ostrich`. Prédiction du taxi-out (secondes) pour les départs de dix aéroports européens, janvier et juillet 2026, métrique RMSE.
+Team `motivated-ostrich`. Taxi-out prediction (seconds) for departures at ten
+European airports, January and July 2026, RMSE metric.
 
-Validation locale : entraînement sur 10 mois de 2025, validation sur janvier et juillet 2025 (344 227 départs), pour mimer la saisonnalité du ranking. Les RMSE locaux ne sont comparables entre eux qu'à partir de la v4 (voir note en 1.3).
+Local validation: train on 10 months of 2025, validate on January and July
+2025 (344,227 departures), mimicking the ranking's seasonality. Local RMSE
+values are only comparable to each other from v4 onwards (see note in 1).
 
-## 1. Chronologie des versions
+## 1. Version chronology
 
-| Version | Idée testée | RMSE local | Public | Verdict |
+| Version | Tested idea | Local RMSE | Public | Verdict |
 |---|---|---|---|---|
-| v2 | LightGBM direct, features de base + deltas NM + congestion aéroport | 254,0* | | Baseline fonctionnelle |
-| v3 | Résidu sur AOBT_3 + nettoyage des appariements aberrants | 274,1* puis 252,9* | | Le nettoyage dégrade (les lignes retirées sont dans la vérité terrain). Sans nettoyage, gain de 1 s |
-| v4 | Découverte des lignes "block = sched" ; classifieur + mélange probabiliste ; réintégration des taxi longs | 379,8 | | **Gain de 29 %** (533,1 sans mélange). Première mesure honnête, taxi longs inclus |
-| v5 | Target encoding hors-fold, scale_pos_weight | (cassé) | | Early stopping à l'itération 7 : pondération incompatible avec la métrique d'arrêt |
-| v5.1 | Idem sans pondération, arrêt sur AUC, exposants par aéroport | 375,4 | 347,80 (v1) | Classifieur réparé mais rappel inchangé (11 %). Gain de 4 s |
-| v6 | Comparatif : modèle unique vs mélange vs corps/queue | 472,8 / 379,1 / 379,4 | | **Modèle unique réfuté** (+100 s). Décomposition corps/queue neutre |
-| v7 | Balayage joint (γ_c, γ_t, κ) avec contrôle de transfert janvier/juillet | 375,9 mais rejeté | | Le gain de 3,5 s ne survit pas au transfert (−18 s d'un mois à l'autre). Retour ARCH 0 |
-| v7.1 | Correctif : rounds figés au réentraînement (bug : early stopping impossible sur train = val) | 379,4 | 341,33 (v7) | Pipeline propre |
-| v8 | Calibration de γ_c au leaderboard (0,5 / 0,6 / 0,75 / 1,0) | 389,8 / 379,4 / 380,1 / 391,0 | 358,85 / 347,80 / **347,59** / 355,16 | Courbe publique parallèle à la locale, décalage constant ~32 s : **la validation locale est un proxy fiable** |
-| v9 | Contexte arrivées (taxi-in autour du décollage) + enchaînement par poste | 371,1 | | +8,3 s, réparti sur tous les aéroports. CDG et Rome inchangés |
-| v10 | Signal de panne de reporting (corruption des arrivées dans la fenêtre) | 368,2 | | +2,9 s, Rome −33 s, autres aéroports légèrement dégradés. Signal réel mais rare (0,3 % des vols) |
-| v11 | Branche Rome (non apparié, décollage le lendemain) : espérance à trois régimes | 348,4 | 340,40 (v11, pipeline v13) | **+19,8 s local, −2,45 s public**. Voir 3.2 |
-| v12 | Ensembling 5 seeds + file d'attente par piste | 346,4 | | +2,0 s, entièrement dû à l'ensembling |
-| v13 | Target encoding par numéro de vol + corruption des arrivées liées au poste | 345,2 | **337,95** (v10, sans Rome) | +1,2 s local. Meilleur public à ce jour |
-| v14 | Temps non entravé (PRU) par poste-piste, régresseur B sur l'excédent | 345,9 | | Neutre. `unimpeded_p50` 8e feature, mais la géométrie était déjà extraite de `stand_runway` |
-| v15 | File d'attente ancrée sur l'off-block (N, Q, taxi récent, Idris/Ravizza) | 345,0 | 338,02 (v15, avec Rome) | Neutre. Aucune feature `q_*` dans le top 15 : la congestion n'apporte rien quand la durée réelle côté NM est connue |
+| v2 | Direct LightGBM, base features + NM deltas + airport congestion | 254.0* | | Working baseline |
+| v3 | Residual over AOBT_3 + cleaning of aberrant matches | 274.1* then 252.9* | | Cleaning hurts (removed rows are in the ground truth). Without cleaning, 1 s gain |
+| v4 | Discovery of "block = sched" rows; classifier + probabilistic mixture; long-taxi rows reinstated | 379.8 | | **29 % gain** (533.1 without mixture). First honest measurement, long taxis included |
+| v5 | Out-of-fold target encoding, scale_pos_weight | (broken) | | Early stopping at iteration 7: weighting incompatible with the stopping metric |
+| v5.1 | Same without weighting, AUC stopping, per-airport exponents | 375.4 | 347.80 (v1) | Classifier fixed but recall unchanged (11 %). 4 s gain |
+| v6 | Comparison: single model vs mixture vs body/tail | 472.8 / 379.1 / 379.4 | | **Single model refuted** (+100 s). Body/tail split neutral |
+| v7 | Joint sweep (gamma_c, gamma_t, kappa) with month-transfer control | 375.9 but rejected | | The 3.5 s gain does not survive transfer (−18 s from one month to the other). Back to ARCH 0 |
+| v7.1 | Fix: frozen rounds at retraining (bug: early stopping impossible with train = val) | 379.4 | 341.33 (v7) | Clean pipeline |
+| v8 | gamma_c calibration on the leaderboard (0.5 / 0.6 / 0.75 / 1.0) | 389.8 / 379.4 / 380.1 / 391.0 | 358.85 / 347.80 / **347.59** / 355.16 | Public curve parallel to the local one, constant ~32 s offset: **local validation is a reliable proxy** |
+| v9 | Arrival context (taxi-in around takeoff) + stand linking | 371.1 | | +8.3 s, spread across all airports. CDG and Rome unchanged |
+| v10 | Reporting-outage signal (corrupted arrivals in the window) | 368.2 | | +2.9 s, Rome −33 s, other airports slightly degraded. Real but diluted signal (0.3 % of flights) |
+| v11 | Rome branch (unmatched, next-day takeoff): three-regime expectation | 348.4 | 340.40 (v11, v13 pipeline) | **+19.8 s local, −2.45 s public**. See 3.2 |
+| v12 | 5-seed ensembling + per-runway queue features | 346.4 | | +2.0 s, entirely from ensembling |
+| v13 | Flight-number target encoding + stand-linked arrival corruption | 345.2 | **337.95** (v10, no Rome) | +1.2 s local. Best public score to date |
+| v14 | PRU-style unimpeded time per stand-runway, regressor B on the excess | 345.9 | | Neutral. `unimpeded_p50` 8th feature, but the geometry was already extracted from `stand_runway` |
+| v15 | Off-block-anchored queue features (N, Q, recent taxi; Idris/Ravizza) | 345.0 | 338.02 (v15, with Rome) | Neutral. No `q_*` feature in the top 15: congestion adds nothing once the NM-side duration is known |
 
-\* Validation sur données filtrées (taxi > 7 200 s retirés), non comparable aux versions suivantes.
+\* Validation on filtered data (taxi > 7,200 s removed), not comparable with later versions.
 
-Meilleure version de production : **pipeline v15 sans branche Rome** (soumission v14, attendue autour de 335 s public).
+Best production version: **v15 pipeline without the Rome branch** (submission
+v14, expected around 335 s public).
 
-## 2. Diagnostics qui ont orienté le travail
+## 2. Diagnostics that steered the work
 
-| Diagnostic | Résultat | Conséquence |
+| Diagnostic | Result | Consequence |
 |---|---|---|
-| Naïf `MVT − AOBT_3` | RMSE 380,8 s ; biais médian par aéroport de −118 s (Rome) à +296 s (Istanbul) | Écart de définition systématique entre off-block aéroport et NM : cible = résidu sur AOBT_3 |
-| Lignes "block = sched" (`\|BLOCK − SCHED\| ≤ 10 s`) | 4,80 % des départs, 29 % de l'erreur quadratique, taxi médian 1 009 s (normal : 910 s) | Le taxi-out n'est pas un taxi-out sur ces lignes : `TAXITIME = MVT − SCHED` exactement (écart médian 3 s). Mélange probabiliste (v4) |
-| Concentration de l'erreur | 10 lignes = 29,6 % du MSE ; 100 lignes = 44 % ; 1 000 lignes = 58 % | Le RMSE est décidé par une poignée d'enregistrements |
-| Décomposition du MSE par régime (v11) | Normal 55 %, queue > 1 h 32 % (dont 25 % dans deux lignes de CDG), Rome 8 %, block = sched 5,6 % | Le plancher est le bruit du régime normal ; les deux lignes de CDG (84 240 et 58 206 s, sans signature) sont imprédictibles |
-| Bug "+1 jour" | 14 lignes en 2025, 12 à Rome, block estampillé à la date programmée avec l'heure réelle du lendemain | Une seule de ces lignes vaut 21 500 de MSE. Branche Rome (v11) |
-| Sous-ensemble Rome (non apparié, décollage le lendemain) | 168 vols/an ; retard > 12 h : 11 "+1 jour", 16 "block = sched", 0 normal | Espérance à trois régimes par tranche de retard |
-| Local vs public (v8) | Décalage constant de 31 à 36 s sur quatre valeurs de γ | Les gains locaux se transposent, sauf ceux qui reposent sur la fréquence des bugs (v11) |
+| Naive `MVT − AOBT_3` | RMSE 380.8 s; per-airport median bias from −118 s (Rome) to +296 s (Istanbul) | Systematic definition gap between airport and NM off-blocks: target = residual over AOBT_3 |
+| "Block = sched" rows (`\|BLOCK − SCHED\| ≤ 10 s`) | 4.80 % of departures, 29 % of squared error, median taxi 1,009 s (normal: 910 s) | The taxi-out is not a taxi-out on these rows: `TAXITIME = MVT − SCHED` exactly (median gap 3 s). Probabilistic mixture (v4) |
+| Error concentration | 10 rows = 29.6 % of MSE; 100 rows = 44 %; 1,000 rows = 58 % | The RMSE is decided by a handful of records |
+| MSE decomposition by regime (v11) | Normal 55 %, tail > 1 h 32 % (25 % in two CDG rows), Rome 8 %, block = sched 5.6 % | The floor is the normal regime's noise; the two CDG rows (84,240 and 58,206 s, no signature) are unpredictable |
+| "+1 day" bug | 14 rows in 2025, 12 at Rome; block stamped with the scheduled date and the actual next-day time | A single such row is worth 21,500 of MSE. Rome branch (v11) |
+| Rome subset (unmatched, next-day takeoff) | 168 flights/year; delay > 12 h: 11 "+1 day", 16 "block = sched", 0 normal | Three-regime expectation by delay bucket |
+| Local vs public (v8) | Constant 31-36 s offset across four gamma values | Local gains transfer, except those relying on bug frequencies (v11) |
 
-## 3. Hypothèses testées pour améliorer la détection de la corruption
+## 3. Hypotheses tested to improve corruption detection
 
-Le classifieur est resté à AUC 0,88 et rappel 11 % à p > 0,5 sur toutes les versions. Signatures testées :
+The classifier stayed at AUC 0.88 and 11 % recall at p > 0.5 across all
+versions. Tested signatures:
 
-| Signature | Résultat | Retenue |
+| Signature | Result | Kept |
 |---|---|---|
-| Opérateur, poste, heure (target encoding) | Utilisées (top features) mais aucun gain de rappel | Oui (v5.1) |
-| Contexte arrivées (taxi-in, congestion) | Aide le régime normal, pas la détection | Oui (v9) |
-| Panne de reporting (arrivées corrompues dans l'heure) | Corrélation 0,34 ; 4 % → 23-30 % de corruption quand > 30 % des arrivées sont corrompues, mais 0,3 % des vols concernés | Oui (v10) |
-| `MVT_ID` hors séquence temporelle | Distributions identiques corrompues / normales | Non |
-| Arrivée précédente au même poste corrompue | 14,6 % contre 4,5 % ; précédente et suivante : 38,5 % (3 000 vols/an) | Oui (v13) |
-| Numéro de vol (target encoding) | Persistance H1 → H2 de 0,815 ; 37 numéros à > 80 % (précision 94 %) mais les numéros à > 30 % ne portent que 10 % des corrompues | Oui (v13) |
-| Rollover de date (décollage après minuit local) | 7,1 % de "+1 jour" parmi les rollover LIRF non appariés ; signature complète = Rome + non apparié + décollage le lendemain | Oui (v11), puis retirée (3.2) |
-| Empreintes de format (secondes rondes, microsecondes, longueur des champs, règles de vol) | Tous les ratios ~1 | Non |
-| Champs aéroport manquants (`FLIGHT_mvt`, `STAND`, `RUNWAY`) | < 0,1 % des lignes | Non |
-| Doublons de numéro de vol le même jour | Non concluant | Non |
-| Temps de rotation ≈ taxi (block copié de l'in-block) | 1 ligne sur 141 | Non |
-| OPDI (ADS-B EUROCONTROL) : `first_seen`, `entry-taxiway` | Couverture 16 % (0,2 % à Istanbul, 1,6 % à Madrid) ; `first_seen` arrive 700 à 1 300 s après l'off-block ; RMSE naïf 1 330 s contre 370 pour AOBT_3 ; poids 0,01 en combinaison | Non |
-| Écart aéroport/NM côté arrivées comme mesure contemporaine du système | `ARVT_3` est un atterrissage, pas un in-block : non testable | Non |
+| Operator, stand, hour (target encoding) | Used (top features) but no recall gain | Yes (v5.1) |
+| Arrival context (taxi-in, congestion) | Helps the normal regime, not detection | Yes (v9) |
+| Reporting outage (corrupted arrivals within the hour) | Correlation 0.34; 4 % → 23-30 % departure corruption when > 30 % of arrivals are corrupted, but 0.3 % of flights concerned | Yes (v10) |
+| `MVT_ID` out of temporal sequence | Identical distributions corrupted / normal | No |
+| Previous arrival at the same stand corrupted | 14.6 % vs 4.5 %; previous AND next: 38.5 % (3,000 flights/year) | Yes (v13) |
+| Flight number (target encoding) | H1 → H2 persistence 0.815; 37 numbers > 80 % (precision 94 %) but numbers > 30 % carry only 10 % of corrupted rows | Yes (v13) |
+| Date rollover (takeoff after local midnight) | 7.1 % of "+1 day" among unmatched LIRF rollovers; full signature = Rome + unmatched + next-day takeoff | Yes (v11), then removed (3.2) |
+| Format fingerprints (round seconds, microseconds, field lengths, flight rules) | All ratios ~1 | No |
+| Missing airport fields (`FLIGHT_mvt`, `STAND`, `RUNWAY`) | < 0.1 % of rows | No |
+| Same-day duplicate flight numbers | Inconclusive | No |
+| Turnaround ≈ taxi (block copied from the in-block) | 1 row out of 141 | No |
+| OPDI (EUROCONTROL ADS-B): `first_seen`, `entry-taxiway` | Coverage 16 % (0.2 % at Istanbul, 1.6 % at Madrid); `first_seen` trails the off-block by 700-1,300 s; naive RMSE 1,330 s vs 370 for AOBT_3; weight 0.01 in combination | No |
+| Airport/NM gap on arrivals as a contemporaneous system measure | `ARVT_3` is a landing time, not an in-block: untestable | No |
 
-Conclusion : la corruption est majoritairement diffuse et non prédictible avec les données fournies. Les 90 % de lignes corrompues restantes sont dans des numéros de vol, opérateurs et postes à 2-10 % de taux, sans signature.
+Conclusion: the corruption is mostly diffuse and unpredictable with the
+provided data. The remaining 90 % of corrupted rows sit in flight numbers,
+operators and stands with 2-10 % rates, without a signature.
 
-### 3.1 Ce qui n'a pas marché sur le régime normal
+### 3.1 What did not work on the normal regime
 
-| Idée | Résultat |
+| Idea | Result |
 |---|---|
-| Modèle unique L2 sur toutes les lignes (v6) | 472,8 s contre 379,1 : la structure du mélange est nécessaire |
-| Loss Huber pour le régresseur sans AOBT_3 (v5) | Dégrade (3 141 contre 3 047) |
-| Décomposition corps / queue avec espérance de queue (v6, v7) | Neutre, puis gain fantôme non transféré |
-| File d'attente par piste au décollage (v12) | Aucune feature dans le top 15 |
-| Temps non entravé PRU (v14) | Résidu 226,1 → 225,4 s |
-| File d'attente à l'off-block, N / Q / taxi récent (v15) | Résidu 225,4 → 224,6 s, aucune feature dans le top 15 |
-| Météo (METAR) | Non testée : trois papiers indépendants (Haneda, Zurich, JFK) concluent à un effet nul hors événements extrêmes |
+| Single L2 model on all rows (v6) | 472.8 s vs 379.1: the mixture structure is necessary |
+| Huber loss for the no-AOBT_3 regressor (v5) | Degrades (3,141 vs 3,047) |
+| Body/tail decomposition with tail expectation (v6, v7) | Neutral, then a phantom gain that did not transfer |
+| Per-runway queue at takeoff (v12) | No feature in the top 15 |
+| PRU unimpeded time (v14) | Residual 226.1 → 225.4 s |
+| Off-block queue, N / Q / recent taxi (v15) | Residual 225.4 → 224.6 s, no feature in the top 15 |
+| Weather (METAR) | Not tested: three independent papers (Haneda, Zurich, JFK) find a null effect outside extreme events |
 
-### 3.2 La branche Rome : un gain local qui ne se transpose pas
+### 3.2 The Rome branch: a local gain that does not transfer
 
-La branche prédit, sur le sous-ensemble Rome non apparié décollant le lendemain, l'espérance `r_+1j · (86 400 + μ) + r_bs · delta_sched + r_normal · μ` avec des taux estimés sur 2025 par tranche de retard.
+On the Rome subset (unmatched, next-day takeoff), the branch predicts the
+expectation `r_+1d · (86,400 + mu) + r_bs · delta_sched + r_normal · mu` with
+rates estimated on 2025 by delay bucket.
 
-- Local : +19,8 s (v11), gain présent sur janvier (+14,9) et juillet (+23,8).
-- Public : v10 sans Rome 337,95, v11 avec Rome 340,40, soit **−2,45 s**.
-- Le sous-ensemble existe en 2026 (52 vols contre 46 en validation) mais sa composition a changé : moins de bugs, plus de vols normaux ; l'espérance calibrée sur 2025 surestime.
+- Local: +19.8 s (v11), gain present in January (+14.9) and July (+23.8).
+- Public: v10 without Rome 337.95, v11 with Rome 340.40, i.e. **−2.45 s**.
+- The subset exists in 2026 (52 flights vs 46 in validation) but its
+  composition changed: fewer bugs, more normal flights; the 2025-calibrated
+  expectation overshoots. Arrival corruption rates are stable in 2026
+  (ratios 0.88-1.19), so this is not a regime change: with ~12 events a
+  year, a two-month window is a Poisson draw.
 
-Leçon : modéliser une corruption à partir de sa fréquence passée suppose que le système qui la produit est stationnaire. Ici il ne l'est pas. Le contrôle de transfert entre mois de 2025 ne suffit pas à le détecter ; seul le leaderboard l'a révélé.
+Lesson: modelling a data bug from its past frequency assumes the producing
+system is statistically stationary at the evaluation scale. Rare bugs make
+such corrections positive in expectation but undecidable over two months.
+The month-transfer control on 2025 was not enough to detect it; only the
+leaderboard was.
 
-## 4. Enseignements pour le papier
+## 4. Takeaways for the paper
 
-1. **Le plancher est un plancher de données, pas de modèle.** Le résidu de 226 s sur le régime normal est dominé par l'écart de définition entre l'off-block aéroport et l'off-block NM (écart-type par aéroport de 250 à 500 s). La littérature atteint 75 à 90 s de RMSE sur le roulage physique (Ravizza 2014, Kato 2022) ; la différence est le bruit de mesure, pas la physique.
-2. **Quand la durée côté NM est observée, les features de congestion classiques sont sans effet.** La feature numéro un de la littérature (file au push-back, Idris 2001) n'apporte rien ici.
-3. **Une poignée d'enregistrements décide du RMSE.** Deux lignes portent 25 % du MSE de validation. Le classement public est bruité par construction.
-4. **La corruption des block times est un événement système diffus**, faiblement associé au handler, au poste et à l'avion, persistante par numéro de vol pour une frange seulement, et non prédictible au-delà d'une AUC de 0,88 avec seize signatures testées.
-5. **Les bugs ne sont pas stationnaires.** La correction de Rome, validée par transfert entre mois de 2025, perd sur 2026.
-6. **La validation locale est fidèle quand elle mesure des propriétés physiques** (courbe de γ parallèle, décalage constant), **et trompeuse quand elle mesure des propriétés du système d'information** (branche Rome).
+1. **The floor is a data floor, not a model floor.** The 226 s residual on
+   the normal regime is dominated by the definition gap between airport and
+   NM off-blocks (per-airport sigma 250-500 s). The literature reaches
+   75-90 s RMSE on cleanly measured physical taxiing (Ravizza 2014, Kato
+   2022); the difference is measurement noise, not physics.
+2. **When the NM-side duration is observed, classic congestion features are
+   screened off.** The literature's top predictor (queue at pushback, Idris
+   2001) brings nothing here.
+3. **A handful of records decides the RMSE.** Two rows carry 25 % of the
+   validation MSE. The public ranking is noisy by construction.
+4. **Block-time corruption is a diffuse system-level event**, weakly
+   associated with handler, stand and aircraft, persistent by flight number
+   for a fringe only, and unpredictable beyond AUC 0.88 with sixteen tested
+   signatures.
+5. **Bugs are not stationary at the two-month scale.** The Rome correction,
+   validated by month transfer within 2025, loses on 2026.
+6. **Local validation is faithful when it measures physical properties**
+   (parallel gamma curve, constant offset) **and misleading when it measures
+   information-system properties** (Rome branch).
 
-## 5. Scores publics (leaderboard)
+## 5. Public scores (leaderboard)
 
-| Soumission | Contenu | Score |
+| Submission | Content | Score |
 |---|---|---|
-| v1 | pipeline v5.1, γ = 0,6 | 347,80 |
-| v2 | γ = 0,5 | 358,85 |
-| v3 | γ = 0,75 | 347,59 |
-| v4 | γ = 1,0 | 355,16 |
-| v7 | pipeline v11, avec Rome | 341,33 |
-| v10 | pipeline v13, sans Rome | **337,95** |
-| v11 | pipeline v13, avec Rome | 340,40 |
-| v15 | pipeline v15, avec Rome | 338,02 |
-| v14 | pipeline v15, sans Rome | à soumettre (attendu ~335) |
+| v1 | v5.1 pipeline, gamma = 0.6 | 347.80 |
+| v2 | gamma = 0.5 | 358.85 |
+| v3 | gamma = 0.75 | 347.59 |
+| v4 | gamma = 1.0 | 355.16 |
+| v7 | v11 pipeline, with Rome | 341.33 |
+| v10 | v13 pipeline, no Rome | **337.95** |
+| v11 | v13 pipeline, with Rome | 340.40 |
+| v15 | v15 pipeline, with Rome | 338.02 |
+| v14 | v15 pipeline, no Rome | to submit (expected ~335) |
 
-Tête du classement : 246,4 (1er), 260,9 (2e). Écart d'environ 80 s, non expliqué par les données fournies (voir 4).
+Leaderboard head: 246.4 (1st), 260.9 (2nd). The ~80 s gap is not explained
+by anything measurable in the provided data (see 4).

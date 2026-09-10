@@ -1,111 +1,107 @@
-# Plan du papier JOAS (format article, pré-print comme les équipes 2025)
+# JOAS paper plan (article format, pre-print like the 2025 teams)
 
-**Titre de travail :** What Is a Taxi-Out Time? Data Floors, Silent
+**Working title:** What Is a Taxi-Out Time? Data Floors, Silent
 Substitutions and the Limits of Prediction in the PRC Data Challenge 2026
 
-**Angle :** pas un rapport de méthode gagnante, mais une étude de ce qui est
-prédictible et de ce qui ne l'est pas dans un jeu de données opérationnel
-réel. La valeur du papier est dans les résultats négatifs mesurés proprement
-et dans la caractérisation des artefacts, choses que les praticiens (PRU,
-aéroports, compagnies) rencontrent tous les jours et publient rarement.
+**Angle:** not a winning-method report, but a study of what is predictable
+and what is not in a real operational dataset. The paper's value lies in
+cleanly measured negative results and artifact characterisation — things
+practitioners (PRU, airports, airlines) meet daily and rarely publish.
 
-Longueur cible : 10-14 pages, gabarit JOAS (voir les pré-prints 2025 comme
-modèle de ton et de structure).
+Target length: 10-14 pages, JOAS template (use the 2025 pre-prints as a
+model for tone and structure).
 
 ---
 
 ## 1. Introduction (1 page)
 
-- Le taxi-out comme métrique d'efficacité (fuel, CO2, A-CDM) ; littérature
-  atteint 75-90 s de RMSE sur le roulage physique (Ravizza 2014, Kato 2022).
-- Le challenge : prédire TAXITIME sur jan/juil 2026, 10 aéroports, RMSE.
-- Thèse du papier (les trois findings du README).
-- Annonce du plan.
+- Taxi-out as an efficiency metric (fuel, CO2, A-CDM); literature reaches
+  75-90 s RMSE on physical taxiing (Ravizza 2014, Kato 2022).
+- The challenge: predict TAXITIME for Jan/Jul 2026, 10 airports, RMSE.
+- Thesis of the paper (the three findings of the README).
+- Outline.
 
-## 2. Data (1,5 page)
+## 2. Data (1.5 pages)
 
-- Les deux sources (mouvements aéroport, plans de vol NM) et la jointure.
-- **Figure 1** : biais médian horaire BLOCK − AOBT_3 par aéroport (le tableau
-  de la v3 : −118 s Rome → +296 s Istanbul, avec écarts-types). Message :
-  deux définitions d'off-block coexistent.
-- Ce qui est masqué dans le ranking et ce qui ne l'est pas (AOBT_3 visible :
-  conséquence majeure, section 5).
+- The two sources (airport movements, NM flight plans) and the join.
+- **Figure 1**: hourly median bias BLOCK − AOBT_3 per airport (v3 table:
+  −118 s Rome → +296 s Istanbul, with sigmas). Message: two off-block
+  definitions coexist.
+- What is masked in the ranking and what is not (AOBT_3 visible: major
+  consequence, section 5).
 
-## 3. Anatomie de la cible : quand TAXITIME n'est pas un taxi (2,5 pages)
+## 3. Anatomy of the target: when TAXITIME is not a taxi (2.5 pages)
 
-- 3.1 Substitution par l'horaire : définition (|BLOCK − SCHED| ≤ 10 s),
-  4,80 %, TAXITIME = MVT − SCHED à 3 s près. **Figure 2** : taux par
-  aéroport (Rome 18 %). Confirmation des organisateurs (kept as-is).
-- 3.2 Le bug de changement de date à LIRF : mécanisme (date programmée +
-  heure réelle), 12-14 cas/an, **Table 1** : les 13 cas de 2025.
-- 3.3 Les inclassables : 141 taxi > 2 h ni l'un ni l'autre ; les deux lignes
-  de CDG. **Figure 3** : décomposition du MSE de validation par régime
-  (55 / 32 / 8 / 5,6 %) et courbe de concentration (10 lignes = 30 %).
+- 3.1 Schedule substitution: definition (|BLOCK − SCHED| ≤ 10 s), 4.80 %,
+  TAXITIME = MVT − SCHED within 3 s. **Figure 2**: rate per airport (Rome
+  18 %). Organisers' confirmation (kept as-is).
+- 3.2 The LIRF date-rollover bug: mechanism (scheduled date + actual time),
+  12-14 cases/year, **Table 1**: the 13 cases of 2025.
+- 3.3 The unclassifiable: 141 taxis > 2 h that are neither; the two CDG
+  rows. **Figure 3**: validation MSE decomposition by regime
+  (55 / 32 / 8 / 5.6 %) and concentration curve (10 rows = 30 %).
 
-## 4. Méthode (2 pages)
+## 4. Method (2 pages)
 
-- Le mélange par régimes, l'argument espérance conditionnelle, le résidu
-  sur AOBT_3.
-- Le protocole : validation jan+juil, contrôle de transfert entre mois,
-  rounds figés, ensembling. Calibration au leaderboard : **Figure 4** (la
-  courbe gamma locale vs publique, décalage constant 32 s) — la validation
-  locale est un proxy fiable pour les propriétés physiques.
-- Tableau 2 : ablation (reprendre versions.md, colonnes local/public).
+- The regime mixture, the conditional-expectation argument, the residual
+  over AOBT_3.
+- The protocol: Jan+Jul validation, month-transfer control, frozen rounds,
+  ensembling. Leaderboard calibration: **Figure 4** (local vs public gamma
+  curve, constant 32 s offset) — local validation is a reliable proxy for
+  physical properties.
+- Table 2: ablation (from versions.md, local/public columns).
 
-## 5. Ce qui ne marche pas, et pourquoi c'est intéressant (3 pages)
+## 5. What does not work, and why that is interesting (3 pages)
 
-- 5.1 La détection de la substitution plafonne : 16 signatures, AUC 0,88,
-  rappel 11 %. **Table 3** : signatures et verdicts (condensé de
-  versions.md §3). Persistance par numéro de vol (0,815) mais corruption
-  majoritairement diffuse.
-- 5.2 Les features de congestion sont éteintes par l'observation d'AOBT_3 :
-  N/Q/taxi récent (Idris, Ravizza) sans effet — screening off. Discussion :
-  la littérature prédit avant le push-back ; le challenge « prédit » après
-  le décollage.
-- 5.3 L'ADS-B ouvert ne fournit pas d'off-block : OPDI, couverture sol,
-  first_seen à +700/1300 s. **Table 4** : appariement et RMSE par aéroport.
-- 5.4 La non-stationnarité des bugs : la branche Rome, +19,8 s local
-  (transfert entre mois positif !), −2,45 s public. Taux de corruption des
-  arrivées 2026 ≈ 2025 (**Table 5**) : ce n'est pas un changement de
-  régime, c'est du Poisson sur 12 événements/an. Leçon générale pour la
-  correction de données opérationnelles.
+- 5.1 Substitution detection plateaus: 16 signatures, AUC 0.88, recall
+  11 %. **Table 3**: signatures and verdicts (condensed from versions.md
+  §3). Flight-number persistence (0.815) but mostly diffuse corruption.
+- 5.2 Congestion features are screened off by the observed AOBT_3:
+  N/Q/recent taxi (Idris, Ravizza) without effect. Discussion: the
+  literature predicts before pushback; the challenge "predicts" after
+  takeoff.
+- 5.3 Open ADS-B provides no off-block: OPDI, ground coverage, first_seen
+  at +700/1,300 s. **Table 4**: matching and RMSE per airport.
+- 5.4 Bug non-stationarity: the Rome branch, +19.8 s local (positive month
+  transfer!), −2.45 s public. 2026 arrival corruption rates ≈ 2025
+  (**Table 5**): not a regime change but Poisson sampling over 12
+  events/year. General lesson for operational data correction.
 
-## 6. Discussion (1,5 page)
+## 6. Discussion (1.5 pages)
 
-- Le plancher : bruit de définition ≈ 226 s de résidu ; comparaison aux
-  75-90 s de la littérature sur du roulage physique mesuré proprement.
-- Implications pour la PRU et les aéroports : la qualité du champ off-block
-  (et un flag de substitution) vaudrait plus que tout modèle.
-- Implications pour les challenges : métrique RMSE + queues rares = loterie
-  sur quelques lignes ; suggestion (RMSE tronqué ou score par régime).
-- Limites : deux mois de test, pas d'accès aux systèmes des aéroports.
+- The floor: definition noise ≈ 226 s residual; comparison to the 75-90 s
+  literature on cleanly measured taxiing.
+- Implications for PRU and airports: the quality of the off-block field
+  (and a substitution flag) would be worth more than any model.
+- Implications for challenges: RMSE + rare tails = lottery over a few rows;
+  suggestion (trimmed RMSE or per-regime scoring).
+- Limitations: two test months, no access to airport systems.
 
-## 7. Conclusion (0,5 page)
+## 7. Conclusion (0.5 page)
 
-## Reproductibilité
+## Reproducibility
 
-- Lien du dépôt, données du challenge uniquement, seeds fixées.
+- Repository link, challenge data only, fixed seeds.
 
 ---
 
-## Matériel déjà disponible
+## Material already available
 
-| Élément | Source |
+| Item | Source |
 |---|---|
-| Fig. 1 (biais par aéroport) | diagnostic v3 (notebook) |
-| Fig. 2 (taux substitution) | diagnostic v4 |
-| Tab. 1 (cas +1 jour) | diagnostic v11 |
-| Fig. 3 (décomposition MSE) | val_preds_v15.parquet |
-| Fig. 4 (gamma local/public) | scores v1-v4 + validation v8 |
-| Tab. 2 (ablation) | results/versions.md §1 et §5 |
+| Fig. 1 (per-airport bias) | notebook 01 |
+| Fig. 2 (substitution rate) | notebook 01 |
+| Tab. 1 (+1 day cases) | v11 diagnostic |
+| Fig. 3 (MSE decomposition) | notebook 01 (val_preds_v15.parquet) |
+| Fig. 4 (local/public gamma) | notebook 02 |
+| Tab. 2 (ablation) | results/versions.md §1 and §5 |
 | Tab. 3 (signatures) | results/versions.md §3 |
-| Tab. 4 (OPDI) | sortie opdi_diag.py |
-| Tab. 5 (stabilité 2026) | diagnostic piste 2 (arrivées du ranking) |
+| Tab. 4 (OPDI) | opdi_diag.py output |
+| Tab. 5 (2026 stability) | ranking-arrivals diagnostic |
 
-## Calendrier proposé (3 semaines)
+## Proposed schedule (3 weeks)
 
-- S1 : figures et tables (tout est dans les caches et les sorties), sections
-  2-3.
-- S2 : sections 4-5, repo public finalisé et lié.
-- S3 : intro, discussion, relectures (une par Fakhre Ali si possible),
-  dépôt du pré-print et soumission finale du challenge.
+- W1: figures and tables (all in caches and outputs), sections 2-3.
+- W2: sections 4-5, public repo finalised and linked.
+- W3: intro, discussion, proofreading (one pass by Fakhre Ali if possible),
+  pre-print deposit and final challenge submission.

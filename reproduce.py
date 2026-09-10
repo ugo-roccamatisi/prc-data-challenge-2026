@@ -1,20 +1,20 @@
-"""Point d'entree unique : reproduit la soumission finale.
+"""Single entry point: reproduces the final submission.
 
-Prerequis :
+Prerequisites:
   1. pip install -r requirements.txt
-  2. Telecharger les donnees du challenge dans ./data/ (voir README, section Data)
+  2. Download the challenge data into ./data/ (see README, Data section)
 
-Le pipeline (src/pipeline.py) : entrainement, validation temporelle sur
-janvier + juillet 2025, reentrainement sur 2025 complet, et ecriture des
-fichiers de soumission dans ./submissions/.
+The pipeline (src/pipeline.py): training, temporal validation on
+January + July 2025, retraining on full 2025, and writing of the
+submission files into ./submissions/.
 
-Premiere execution : ~20-40 min (calcul des features, mise en cache), puis
-~10-15 min par relance.
+First run: ~20-40 min (feature computation, then cached); ~10-15 min
+per subsequent run.
 """
 import runpy
 from pathlib import Path
 
 if not any(Path("data").glob("training_*.parquet")):
-    raise SystemExit("Donnees absentes : voir README, section Data.")
+    raise SystemExit("Data missing: see README, Data section.")
 
 runpy.run_path(Path("src") / "pipeline.py", run_name="__main__")
