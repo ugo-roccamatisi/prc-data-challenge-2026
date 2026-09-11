@@ -4,7 +4,7 @@ Prediction of taxi-out time (seconds) for departures at ten major European
 airports (EDDF, EDDM, EGLL, EHAM, LEBL, LEMD, LFPG, LIRF, LSZH, LTFM),
 January and July 2026, RMSE metric.
 
-Best public score: **337.95 s** (submission `motivated-ostrich_v10`).
+Final public score: **329.41 s** (submission `motivated-ostrich_v31`, pipeline `src/prc_experiment.py`).
 
 This repository contains the full pipeline, the experiment log (19 tested
 hypotheses with verdicts), and the material for the accompanying paper.
@@ -62,7 +62,8 @@ hypotheses and their verdicts) is in [`results/versions.md`](results/versions.md
 ├── requirements.txt
 ├── reproduce.py               # single entry point
 ├── src/
-│   ├── pipeline.py            # full pipeline (features, models, mixture, submission)
+│   ├── prc_experiment.py      # production pipeline (prepare / run / submit CLI) — final score
+│   ├── pipeline.py            # v16 feature library and earlier end-to-end pipeline
 │   └── stacking_experiment.py # out-of-fold residual corrector (kept: +0.7 s, documented)
 ├── notebooks/
 │   ├── 01_eda_corruption.ipynb   # figures: off-block bias, substitution rate, MSE anatomy
@@ -103,7 +104,11 @@ paper.
 
 ```
 pip install -r requirements.txt
-python reproduce.py
+python reproduce.py                     # earlier end-to-end pipeline (v16)
+# Production pipeline (final submission):
+python src/prc_experiment.py prepare    # builds features (labels masked first)
+python src/prc_experiment.py run        # selection on Nov-Dec, frozen control on Jan+Jul
+python src/prc_experiment.py submit     # writes the submission files
 ```
 
 First run: ~20–40 min (feature computation is cached in `data/`), then

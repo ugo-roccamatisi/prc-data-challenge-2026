@@ -27,11 +27,14 @@ values are only comparable to each other from v4 onwards (see note in 1).
 | v13 | Flight-number target encoding + stand-linked arrival corruption | 345.2 | **337.95** (v10, no Rome) | +1.2 s local. Best public score to date |
 | v14 | PRU-style unimpeded time per stand-runway, regressor B on the excess | 345.9 | | Neutral. `unimpeded_p50` 8th feature, but the geometry was already extracted from `stand_runway` |
 | v15 | Off-block-anchored queue features (N, Q, recent taxi; Idris/Ravizza) | 345.0 | 338.02 (v15, with Rome) | Neutral. No `q_*` feature in the top 15: congestion adds nothing once the NM-side duration is known |
+| v16 | Mixture weight recalibration `w = f(p, log(s − n))` | transfer FAILS (366 → 409 s Jan→Jul) | not submitted | The earlier quick test excluded the Rome subset; applied to all rows, the calibrator blows up on extreme-gap flights. Third illustration of the tail-learning trap, caught by the internal transfer check |
+| v17 | Out-of-fold residual corrector (5 folds, Huber, clipped residuals, lambda swept in-train) | +0.7 | 336.42 (v18 ref) / 335.78 (v19) | Converges in 11 trees: the first stage already extracts everything. The +0.7 s transfers exactly to public |
+| v30 | Teammate's re-engineered pipeline (see 3.3) | selected on Nov-Dec | **329.41** | Label masking before feature building, per-second early stopping on Nov-Dec, plausibility-gated AOBT baseline, clock/rollover features, hard [30, 7200] clip |
 
 \* Validation on filtered data (taxi > 7,200 s removed), not comparable with later versions.
 
-Best production version: **v15 pipeline without the Rome branch** (submission
-v14, expected around 335 s public).
+Best production version: **v30** (`src/prc_experiment.py`, submission
+`motivated-ostrich_v31`, public 329.41 s).
 
 ## 2. Diagnostics that steered the work
 
@@ -81,6 +84,8 @@ operators and stands with 2-10 % rates, without a signature.
 | PRU unimpeded time (v14) | Residual 226.1 → 225.4 s |
 | Off-block queue, N / Q / recent taxi (v15) | Residual 225.4 → 224.6 s, no feature in the top 15 |
 | Weather (METAR) | Not tested: three independent papers (Haneda, Zurich, JFK) find a null effect outside extreme events |
+| Mixture weight recalibration (v16) | Apparent +7.6 s gain on the Rome-free population; −42 s once tails are included. Rejected by the internal transfer check |
+| Out-of-fold residual corrector (v17) | +0.7 s local and public. 11 trees at early stopping: residuals are not a function of the features |
 
 ### 3.2 The Rome branch: a local gain that does not transfer
 
@@ -101,6 +106,35 @@ system is statistically stationary at the evaluation scale. Rare bugs make
 such corrections positive in expectation but undecidable over two months.
 The month-transfer control on 2025 was not enough to detect it; only the
 leaderboard was.
+
+### 3.3 The v30 re-engineering: +6.4 s public from protocol, not modelling
+
+`src/prc_experiment.py` (written by a teammate) keeps the exact v16
+architecture (two-regime mixture, p^0.75, A/B regressors, out-of-fold
+encodings) and changes the engineering around it:
+
+- **Departure labels are masked before any contextual feature is built**
+  (`TAXITIME` and `BLOCK_TIME` set to NaN on departures), so training
+  features are computed under exactly the ranking's conditions.
+- **Early stopping measures the final RMSE in seconds** (custom feval
+  applying the offset and clipping), per component, on a dedicated
+  **November-December selection split**; January + July become a frozen,
+  untouched control. The blend choice (13 predefined configurations, with
+  an eligibility rule: ≥ 1 s gain and no month degraded) is locked before
+  the control is ever scored.
+- **Plausibility-gated baseline**: the AOBT_3 offset is only used when
+  `0 ≤ MVT − AOBT_3 ≤ 7200 s`; otherwise the unimpeded p50 takes over.
+  Rows with day-scale AOBT deltas no longer poison the residual regressor.
+- **Clock features**: per-source time-of-day encodings, cross-source
+  deltas (AOBT/LOBT/IOBT/EOBT, with wrapped variants) and **day-gap
+  features** that capture date rollovers as a feature rather than a
+  hand-made branch.
+- **Hard [30, 7200] s clip** on the normal branch.
+
+Public: 335.78 (v19) → **329.41** (v30). Several changes were introduced
+together, so the 6.4 s are not individually attributable; the plausibility
+gate and the day-gap features are the most likely main contributors, as
+they target exactly the tail rows identified in the MSE decomposition.
 
 ## 4. Takeaways for the paper
 
@@ -136,7 +170,16 @@ leaderboard was.
 | v10 | v13 pipeline, no Rome | **337.95** |
 | v11 | v13 pipeline, with Rome | 340.40 |
 | v15 | v15 pipeline, with Rome | 338.02 |
-| v14 | v15 pipeline, no Rome | to submit (expected ~335) |
+| v14 | v15 pipeline, no Rome, 5 seeds | 336.13 |
+| v18 | v17 reference (1 seed) | 336.42 |
+| v19 | v17 corrector (lambda 0.75) | 335.78 |
+| v6 | v10 pipeline, no Rome | 338.06 |
+| v30/v31 | re-engineered pipeline (3.3) | **329.41** |
 
-Leaderboard head: 246.4 (1st), 260.9 (2nd). The ~80 s gap is not explained
-by anything measurable in the provided data (see 4).
+Consistency checks these scores provide: the corrector's +0.7 s local gain
+transfers exactly (v19 − v18 = 0.64 s); 5-seed ensembling is worth only
+0.3 s publicly (v14 vs v18); the Rome branch costs 1.9 s on the v15
+pipeline too (v14 vs v15), confirming v10/v11.
+
+Leaderboard head: 246.4 (1st), 260.9 (2nd). The remaining ~70 s gap is not
+explained by anything measurable in the provided data (see 4).
