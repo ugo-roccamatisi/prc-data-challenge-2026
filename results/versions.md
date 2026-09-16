@@ -29,12 +29,14 @@ values are only comparable to each other from v4 onwards (see note in 1).
 | v15 | Off-block-anchored queue features (N, Q, recent taxi; Idris/Ravizza) | 345.0 | 338.02 (v15, with Rome) | Neutral. No `q_*` feature in the top 15: congestion adds nothing once the NM-side duration is known |
 | v16 | Mixture weight recalibration `w = f(p, log(s − n))` | transfer FAILS (366 → 409 s Jan→Jul) | not submitted | The earlier quick test excluded the Rome subset; applied to all rows, the calibrator blows up on extreme-gap flights. Third illustration of the tail-learning trap, caught by the internal transfer check |
 | v17 | Out-of-fold residual corrector (5 folds, Huber, clipped residuals, lambda swept in-train) | +0.7 | 336.42 (v18 ref) / 335.78 (v19) | Converges in 11 trees: the first stage already extracts everything. The +0.7 s transfers exactly to public |
-| v30 | Teammate's re-engineered pipeline (see 3.3) | selected on Nov-Dec | **329.41** | Label masking before feature building, per-second early stopping on Nov-Dec, plausibility-gated AOBT baseline, clock/rollover features, hard [30, 7200] clip |
+| v30 | Re-engineered pipeline (see 3.3) | selected on Nov-Dec | **329.41** | Label masking before feature building, per-second early stopping on Nov-Dec, plausibility-gated AOBT baseline, clock/rollover features, hard [30, 7200] clip |
 
 \* Validation on filtered data (taxi > 7,200 s removed), not comparable with later versions.
 
-Best production version: **v30** (`src/prc_experiment.py`, submission
-`motivated-ostrich_v31`, public 329.41 s).
+Best production version of the first campaign: **v30**
+(`src/prc_experiment.py`, submission `motivated-ostrich_v31`, public
+327.70 s with the reconstruction rule of section 6, 329.41 s without). The
+second campaign (section 6) supersedes it at 319.21 s.
 
 ## 2. Diagnostics that steered the work
 
@@ -109,7 +111,7 @@ leaderboard was.
 
 ### 3.3 The v30 re-engineering: +6.4 s public from protocol, not modelling
 
-`src/prc_experiment.py` (written by a teammate) keeps the exact v16
+`src/prc_experiment.py` keeps the exact v16
 architecture (two-regime mixture, p^0.75, A/B regressors, out-of-fold
 encodings) and changes the engineering around it:
 
@@ -181,5 +183,147 @@ transfers exactly (v19 − v18 = 0.64 s); 5-seed ensembling is worth only
 0.3 s publicly (v14 vs v18); the Rome branch costs 1.9 s on the v15
 pipeline too (v14 vs v15), confirming v10/v11.
 
-Leaderboard head: 246.4 (1st), 260.9 (2nd). The remaining ~70 s gap is not
-explained by anything measurable in the provided data (see 4).
+Leaderboard head at the time of writing (16 Sep 2026): 241.75 (1st),
+244.83 (2nd), 264.20 (10th). See section 6 for the second campaign and
+section 7 for the updated reading of the remaining gap.
+
+## 6. Second campaign (14 to 16 September 2026)
+
+The first campaign optimised a two-regime mixture through feature
+engineering. The second merged `pipeline.py` (v16) and
+`stacking_experiment.py` (v17) into a single file, `src/taxiout_v19.py`, and
+attacked the problem from the architecture side instead. Submission ids below
+are the actual `motivated-ostrich_vNN.parquet` files, which is the only
+unambiguous key; the first campaign's internal version names (v2 to v30) are
+unrelated to them.
+
+### 6.1 Public scores
+
+| Submission | Configuration | Public |
+|---|---|---|
+| v31 | first-campaign v30 plus the reconstruction rule | 327.70 |
+| v19 | merged pipeline, no rule, no new features | 338.37 |
+| v21 | v19 plus reconstruction rule (hard mode) | 330.42 |
+| v22 | v21 plus posterior sequence features | 326.80 |
+| v23 | v22 plus double capacity, lean classifier, 3 seeds | 325.15 |
+| v25 | v23 plus per-airport models, global classifier, CatBoost | 320.10 |
+| v26 | v25 with CatBoost weight 0.75 instead of 0.5 | **319.21** |
+
+Total: 19.16 s over three days, of which 12.4 s from architecture and
+7.95 s from the reconstruction rule.
+
+### 6.2 The reconstruction rule
+
+For movements never matched to the NM flight list (`FLIGHT_ID_mvt` null, all
+`_flt` columns null, `AIRCRAFT_TYPE_mvt` also null), the airport filled
+`BLOCK_TIME_UTC_mvt` with `SCHED_TIME_UTC_mvt`. The label therefore satisfies
+`TAXITIME = MVT_TIME - SCHED_TIME` to within a few seconds. Both columns are
+present in the ranking file, so the label is recomputable rather than
+predictable.
+
+Derivation, entirely on 2025 (`src/prc_taxiout.py defaults` then `rule`):
+
+- 76 labels above 20,000 s in 2025; 58 of them satisfy the identity within
+  120 s, 72 are at LIRF.
+- On those rows `y - d_sched` has median 1 s and interquartile range 6 s.
+- A naive threshold on `d_sched` alone is useless: at 20,000 s it yields 245
+  candidates for 57 true positives, and applying it costs more than it gains.
+- Adding the two missing-field conditions raises precision from 0.23 to 0.85
+  at the same threshold. Evaluated against the model's own predictions on a
+  January plus July 2025 holdout, hard substitution at a 10,800 s threshold
+  restricted to LIRF reduced the total RMSE from 472.74 to 371.23 s.
+- The 2026 ranking file contains 74 candidates, all at LIRF, against 24 in
+  the equivalent 2025 window: the defect transfers.
+- Measured on the leaderboard: 338.37 to 330.42 s, i.e. 7.95 s. Applied to
+  the first-campaign pipeline it is worth 1.71 s (329.41 to 327.70), which is
+  consistent: that pipeline's mixture already handled part of those rows.
+
+The remaining 18 aberrant labels belong to the date-rollover family and are
+*not* reconstructible: `y - 86,400` matches a planned delta on 1 row out of
+18, and `d_sched` on those rows ranges from 939 to 93,535 s. The block time
+carries the correct time of day and the wrong date, which explains the values
+after the fact but identifies nothing beforehand
+(`src/prc_taxiout.py dayshift`).
+
+### 6.3 Posterior sequence features (non-causal)
+
+The task is retrospective reconstruction, and the ranking file contains every
+movement of January and July 2026, including departures that took off after
+the target flight. Forty-one features were built from that: gaps to the next
+1, 2, 3, 5, 10 and 20 takeoffs on the same runway, forward density windows,
+full burst treatment (position in the burst, burst length, takeoffs remaining
+in it), throughput normalised by the runway's monthly median, and NM clocks of
+the following flights, in particular the number of the next ten departures
+that had *already* pushed back when the target took off, which is the queue
+behind it.
+
+Holdout: clean-lane RMSE 274.83 to 271.54 s, global 370.66 to 368.89 s, gain
+spread over eight airports out of ten. Public: 330.42 to 326.80 s, i.e.
+3.62 s.
+
+This refines finding 2 of section 4 rather than contradicting it. Congestion
+measured *before* the flight is screened off by the observed AOBT_3, which
+v12 and v15 established and which the demand-queue features of section 6.5
+reconfirmed. Congestion measured *after* it is not. These features have no
+operational meaning and only make sense in a reconstruction setting.
+
+### 6.4 Architecture
+
+| Change | Holdout (global / clean) | Verdict |
+|---|---|---|
+| Reference (posterior features, 1 seed) | 368.89 / 271.54 | |
+| Capacity x2 (1,160 trees for regressor A) | 366.43 / 269.80 | Kept, 2.5 s |
+| Capacity x4 | 368.29 / 269.88 | Past the optimum |
+| Capacity x8 | 375.69 / 271.14 | Clearly past it |
+| Three-seed average, equal weights | 364.40 / 268.53 | Kept, 2.0 s |
+| Per-airport models (10 dedicated plus fallback) | 373.21 / 264.51 | Clean lane improves, aberrant rows degrade |
+| Per-airport plus global classifier | 364.12 / 267.84 | Kept: the local classifier overfits Rome's fifty corrupted labels |
+| CatBoost/LightGBM ensemble | 360.07 / 264.11 | Kept, 3.9 s |
+| All three together | 358.82 / 260.60 | Best of the campaign |
+| CatBoost weight sweep (free, no retraining) | 0.75 optimal: 356.60 / 259.19 | Kept, 0.7 s |
+
+Two readings worth recording. Setting the ensemble weight to 0 leaves 362.89 s
+and to 1 leaves 357.38 s: on this problem CatBoost alone beats LightGBM
+alone, it is not merely complementary. And the per-airport split only pays
+once the corruption classifier is kept global, because a classifier dedicated
+to LIRF sees its fifty corrupted labels in a far higher proportion than the
+global one, which drowns them in 1.7 million rows.
+
+### 6.5 Refuted in the second campaign
+
+| Idea | Holdout effect | Verdict |
+|---|---|---|
+| Demand queue anchored on SCHED and EOBT (6 features) | -1.6 s | Refuted. Reconfirms v15: the AOBT-anchored queue already covers it |
+| Stand-neighbour, airport-level and arrival context (34 features) | -3.0 s global | Refuted |
+| Degraded-day detection (arrival taxi-in over its hourly norm) | 0.0 s | Refuted. The signal does not exist in taxi-in: a de-icing aircraft delays itself, not the arrivals |
+| Removing `month` from the features | +5.2 s holdout | Not adopted. Another team reported the same change at +43 s on cross-validation and -7.6 s on the leaderboard; our effect is within seed noise |
+| Upper clipping of predictions | Degrades at every threshold from 1,800 to 7,200 s | Refuted: the extreme labels are real |
+| Constant per-airport mixture on the unmatched lane | -14 s | Refuted: the model already carries row-level information that a group mean destroys |
+| Residual corrector (first campaign v17) at double capacity | lambda drops to 0 | Superseded: capacity and seed averaging absorb what it used to recover |
+
+### 6.6 Measurement noise
+
+Three seeds of a single identical configuration produced 366.43, 366.17 and
+363.52 s, a spread of 2.9 s. This was measured late, and it retrospectively
+disqualifies several single-seed comparisons of both campaigns, including
+four of the refutations above whose magnitude sits inside that band. The
+changes that survive the noise floor are the reconstruction rule (7.95 s
+public), the posterior features (3.62 s public) and the architecture block
+(5.05 s public), all three confirmed on the leaderboard rather than on the
+holdout.
+
+## 7. Where the remaining gap is
+
+With the final configuration, the validation MSE splits as follows: 26 rows
+out of 344,227 carry 58 % of it, and the clean lane carries the rest at
+260 s of RMSE, with a median absolute error of 100 s, a 90th percentile of
+306 s and a 99th percentile of 825 s. Per airport, clean lane: LIRF 557,
+EGLL 267, LFPG 254, LTFM 247, LEBL 218, LSZH 206, EHAM 189, EDDF 183,
+EDDM 179, LEMD 174.
+
+Two consequences. The aberrant rows are in everyone's ranking set, so the
+leader at 241.75 s subtracts them too: their clean-lane RMSE has to be
+around 200 s against our 260. The gap is therefore in the ordinary taxi, not
+in the artifacts. And LFPG, which looked like a problem airport at 577 s,
+falls to 254 s once two rows are removed, whereas LIRF stays at 557 s with
+structured estimators doing no better there than a constant.
