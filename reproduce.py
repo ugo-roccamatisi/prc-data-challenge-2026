@@ -1,12 +1,13 @@
-"""Single entry point: reproduces the final submission.
+"""Single entry point for the first-campaign pipeline.
 
 Prerequisites:
   1. pip install -r requirements.txt
   2. Download the challenge data into ./data/ (see README, Data section)
 
-The pipeline (src/pipeline.py): training, temporal validation on
-January + July 2025, retraining on full 2025, and writing of the
-submission files into ./submissions/.
+This runs src/pipeline.py: training, temporal validation on January + July
+2025, retraining on full 2025, and writing submission files into
+./submissions/. For the best second-campaign submission, use the production
+commands documented in the README.
 
 First run: ~20-40 min (feature computation, then cached); ~10-15 min
 per subsequent run.

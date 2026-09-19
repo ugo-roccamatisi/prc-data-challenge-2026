@@ -34,9 +34,10 @@ corruption classifier, and a CatBoost/LightGBM ensemble.
 
 Five findings we consider more interesting than the score:
 
-1. **The error floor is a data floor, not a model floor.** Twenty-six rows out
-   of 344,227 carry 58 % of the validation MSE. Once they are excluded, the
-   clean-lane RMSE is 260 s and the median absolute error is 100 s.
+1. **A substantial part of our observed error floor is a data floor.**
+   Twenty-six rows out of 344,227 carry 58 % of the validation MSE. Once they
+   are excluded, the clean-lane RMSE is 260 s and the median absolute error is
+   100 s. This does not establish a universal lower bound for other models.
 2. **One corrupted family is exactly reconstructible from provided columns.**
    For movements never matched to NM data, the airport filled `BLOCK_TIME`
    with the scheduled time, so `TAXITIME = MVT_TIME - SCHED_TIME` holds to
@@ -54,11 +55,10 @@ Five findings we consider more interesting than the score:
    regressors with a global classifier plus a CatBoost ensemble brought 5.1 s
    on the leaderboard, while four separate families of engineered features
    brought nothing.
-5. **Seed noise is 2.9 s on this task.** Three seeds of an identical
-   configuration gave 366.43, 366.17 and 363.52 s. Any single-seed comparison
-   below roughly 3 s is unmeasured, which invalidates a large share of the
-   comparisons routinely reported in this kind of competition, including
-   several of our own first-campaign ones.
+5. **Three seeds span 2.9 s in one fixed configuration.** They gave 366.43,
+   366.17 and 363.52 s. Three runs do not estimate a general noise floor, but
+   they make smaller single-seed effects unresolved, including several of our
+   own first-campaign comparisons.
 
 The complete version-by-version log is in
 [`results/versions.md`](results/versions.md).
@@ -82,6 +82,9 @@ The complete version-by-version log is in
 ├── results/
 │   └── versions.md              # experiment log, both campaigns
 ├── paper/
+│   ├── main.tex                # paper source
+│   ├── figures.py              # regenerates the paper figures
+│   ├── figures/                # versioned figure PDFs used by LaTeX
 │   └── outline.md
 ├── LICENSE
 └── data/                        # not versioned; see below

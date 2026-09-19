@@ -3,3 +3,11 @@ data/*
 submissions/
 __pycache__/
 *.parquet
+
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
