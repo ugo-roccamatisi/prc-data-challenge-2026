@@ -11,6 +11,18 @@ This repository contains the full pipeline, the experiment log (two campaigns,
 30 tested hypotheses with verdicts) and the material for the accompanying
 paper.
 
+## At a glance
+
+- **Task:** predict taxi-out time for ten major European airports.
+- **Best public score:** 319.21 s RMSE.
+- **Core idea:** separate normal operations from corrupted off-block records,
+  then combine airport-specific regressors with a global corruption classifier.
+- **Reproduce:** install `requirements.txt`, run `src/taxiout_v19.py`, then
+  apply the documented reconstruction rule with `src/apply_rule.py`.
+- **Documentation:** methodology below, complete experiment history in
+  [`results/versions.md`](results/versions.md), and the final report in
+  [`paper/report/prc_challenge_2026_report.pdf`](paper/report/prc_challenge_2026_report.pdf).
+
 ## Method in one paragraph
 
 The provided `TAXITIME` is not always a taxi time. About 4.8 % of departures
@@ -82,10 +94,9 @@ The complete version-by-version log is in
 ├── results/
 │   └── versions.md              # experiment log, both campaigns
 ├── paper/
-│   ├── main.tex                # paper source
-│   ├── figures.py              # regenerates the paper figures
-│   ├── figures/                # versioned figure PDFs used by LaTeX
-│   └── outline.md
+│   ├── figures/                # versioned figures used in the report
+│   └── report/
+│       └── prc_challenge_2026_report.pdf
 ├── LICENSE
 └── data/                        # not versioned; see below
 ```
