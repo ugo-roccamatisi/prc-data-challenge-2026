@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-PRC Data Challenge 2026 - prediction du taxi-out.
+PRC Data Challenge 2026 - taxi-out prediction.
 
-Trois sous-commandes :
+Sub-commands:
 
-  diagnose  verifie les colonnes potentiellement "quasi-cible" (AOBT_3_flt, LOBT_flt)
-            sur 2025 et leur taux de remplissage sur le fichier de ranking,
-            et calcule des baselines triviales pour situer le RMSE du modele.
+  diagnose  checks the potential "near-target" columns (AOBT_3_flt, LOBT_flt)
+            on 2025 and their fill rate in the ranking file,
+            and computes trivial baselines to put the model RMSE in context.
 
-  metar     telecharge les METAR horaires des 10 aeroports (archive ASOS Iowa State)
-            pour 2025 + janvier/juillet 2026 et les met en cache en CSV.
+  metar     downloads hourly METARs for the 10 airports (Iowa State ASOS archive)
+            for 2025 + January/July 2026 and caches them as CSV.
 
-  run       construit les features, entraine LightGBM avec validation sur
-            janvier 2025 et juillet 2025, reentraine sur tout 2025 et ecrit
-            la soumission au format attendu.
+  run       builds the features, trains LightGBM with validation on
+            January 2025 and July 2025, retrains on all of 2025 and writes
+            the submission in the expected format.
 
 Exemples :
   python prc_taxiout.py diagnose --data ./data
   python prc_taxiout.py metar   --data ./data
   python prc_taxiout.py run     --data ./data --out submission.parquet --with-metar
 
-Arborescence attendue sous --data :
+Expected layout under --data:
   training_2025-01-01_2025-02-01.parquet ... training_2025-12-01_2026-01-01.parquet
   ranking.parquet
   submitting.parquet
-  metar/  (cree par la sous-commande metar)
+  metar/  (created by the metar sub-command)
 """
 
 import argparse
@@ -38,7 +38,7 @@ import pandas as pd
 
 AIRPORTS = ["EDDF", "EDDM", "EGLL", "EHAM", "LEBL", "LEMD", "LFPG", "LIRF", "LTFM", "LSZH"]
 
-# reseaux ASOS d'Iowa State pour le telechargement des METAR
+# Iowa State ASOS networks for downloading the METARs
 METAR_NETWORK = {
     "EDDF": "DE__ASOS", "EDDM": "DE__ASOS", "EGLL": "GB__ASOS", "EHAM": "NL__ASOS",
     "LEBL": "ES__ASOS", "LEMD": "ES__ASOS", "LFPG": "FR__ASOS", "LIRF": "IT__ASOS",
@@ -62,12 +62,12 @@ CAT_COLS = [
 def load_training(data_dir, months=None):
     files = sorted(glob.glob(os.path.join(data_dir, "training_*.parquet")))
     if not files:
-        sys.exit("aucun fichier training_*.parquet trouve dans %s" % data_dir)
+        sys.exit("no training_*.parquet file found in %s" % data_dir)
     if months:
         files = [f for f in files if any(m in os.path.basename(f) for m in months)]
     frames = []
     for f in files:
-        print("  lecture %s" % os.path.basename(f))
+        print("  reading %s" % os.path.basename(f))
         frames.append(pd.read_parquet(f))
     df = pd.concat(frames, ignore_index=True)
     return normalise(df)
@@ -76,12 +76,12 @@ def load_training(data_dir, months=None):
 def load_ranking(data_dir):
     path = os.path.join(data_dir, "ranking.parquet")
     if not os.path.exists(path):
-        sys.exit("ranking.parquet introuvable dans %s" % data_dir)
+        sys.exit("ranking.parquet not found in %s" % data_dir)
     return normalise(pd.read_parquet(path))
 
 
 def normalise(df):
-    """Colonnes derivees communes : aeroport de report et temps en secondes."""
+    """Common derived columns: reporting airport and times in seconds."""
     for c in TIME_COLS:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
@@ -94,10 +94,10 @@ def normalise(df):
 
 
 def to_epoch(s):
-    """Serie datetime -> secondes float, NaT devient NaN.
+    """Datetime series -> float seconds, NaT becomes NaN.
 
-    Les parquet peuvent etre en microsecondes ou en nanosecondes : on force
-    l'unite avant la conversion en entier, sinon le facteur est faux.
+    The parquet files can be in microseconds or nanoseconds: the unit is
+    forced before the integer conversion, otherwise the factor is wrong.
     """
     v = pd.to_datetime(s, errors="coerce", utc=True)
     try:
@@ -112,59 +112,59 @@ def to_epoch(s):
 # --------------------------------------------------------------------- diagnostics
 
 def cmd_diagnose(args):
-    print("lecture de deux mois de training pour les diagnostics")
+    print("reading two months of training data for the diagnostics")
     tr = load_training(args.data, months=["2025-01-01", "2025-07-01"])
     dep = tr[tr["PHASE_mvt"].eq("DEP")].copy()
     dep = dep[dep["TAXITIME_SEC_mvt"].notna()]
-    print("\ndepart 2025 (janv + juil) : %d lignes" % len(dep))
+    print("\n2025 departures (Jan + Jul): %d rows" % len(dep))
 
     y = dep["TAXITIME_SEC_mvt"].astype(float)
-    print("taxi-out : moyenne %.0f s, ecart-type %.0f s, mediane %.0f s"
+    print("taxi-out: mean %.0f s, std %.0f s, median %.0f s"
           % (y.mean(), y.std(), y.median()))
     for q in [0.001, 0.01, 0.99, 0.999]:
         print("  quantile %.3f : %.0f s" % (q, y.quantile(q)))
-    print("part < 60 s   : %.3f %%" % (100 * (y < 60).mean()))
-    print("part > 3600 s : %.3f %%" % (100 * (y > 3600).mean()))
+    print("share < 60 s   : %.3f %%" % (100 * (y < 60).mean()))
+    print("share > 3600 s : %.3f %%" % (100 * (y > 3600).mean()))
 
-    # colonnes potentiellement quasi-cible
-    print("\n--- colonnes candidates a une reconstruction directe de la cible ---")
+    # potential near-target columns
+    print("\n--- candidate columns for a direct reconstruction of the target ---")
     for col in ["AOBT_3_flt", "LOBT_flt", "IOBT_flt", "EOBT_1_flt"]:
         if col not in dep.columns:
-            print("%s : absente" % col)
+            print("%s: absent" % col)
             continue
         est = dep["t"] - to_epoch(dep[col])
         err = est - y
         fill = 100 * est.notna().mean()
-        print("%s : renseignee sur %.1f %% des departs 2025" % (col, fill))
+        print("%s: filled for %.1f %% of 2025 departures" % (col, fill))
         if est.notna().sum() > 1000:
             e = err.dropna()
-            print("    erreur vs cible : mediane %.0f s, |err|<60s sur %.1f %%, "
+            print("    error vs target: median %.0f s, |err|<60s for %.1f %%, "
                   "RMSE %.1f s" % (e.median(), 100 * (e.abs() < 60).mean(),
                                    np.sqrt((e ** 2).mean())))
 
-    print("\n--- memes colonnes sur le fichier de ranking (janv + juil 2026) ---")
+    print("\n--- same columns in the ranking file (Jan + Jul 2026) ---")
     rk = load_ranking(args.data)
     rdep = rk[rk["PHASE_mvt"].eq("DEP")]
-    print("departs a predire : %d" % len(rdep))
+    print("departures to predict: %d" % len(rdep))
     for col in ["MVT_TIME_UTC_mvt", "AOBT_3_flt", "LOBT_flt", "IOBT_flt",
                 "EOBT_1_flt", "SCHED_TIME_UTC_mvt", "RUNWAY_mvt", "STAND_mvt"]:
         if col in rdep.columns:
-            print("  %-22s renseignee sur %5.1f %%" % (col, 100 * rdep[col].notna().mean()))
+            print("  %-22s filled for %5.1f %%" % (col, 100 * rdep[col].notna().mean()))
     rarr = rk[rk["PHASE_mvt"].eq("ARR")]
-    print("  arrivees presentes : %d, dont taxi-in renseigne %.1f %%"
+    print("  arrivals present: %d, of which with taxi-in filled %.1f %%"
           % (len(rarr), 100 * rarr["TAXITIME_SEC_mvt"].notna().mean()))
 
-    # baselines triviales, pour situer le RMSE du modele
-    print("\n--- baselines (validation croisee grossiere janv/juil) ---")
+    # trivial baselines, to put the model RMSE in context
+    print("\n--- baselines (coarse Jan/Jul cross-validation) ---")
     dep["hour"] = dep["MVT_TIME_UTC_mvt"].dt.hour
     tr_part = dep[dep["MVT_TIME_UTC_mvt"].dt.month == 1]
     va_part = dep[dep["MVT_TIME_UTC_mvt"].dt.month == 7]
     baselines = {
-        "moyenne globale": [],
-        "moyenne par aeroport": ["AIRPORT"],
-        "moyenne aeroport x piste": ["AIRPORT", "RUNWAY_mvt"],
-        "moyenne aeroport x stand x piste": ["AIRPORT", "STAND_mvt", "RUNWAY_mvt"],
-        "moyenne aeroport x stand x piste x heure": ["AIRPORT", "STAND_mvt", "RUNWAY_mvt", "hour"],
+        "global mean": [],
+        "mean per airport": ["AIRPORT"],
+        "mean per airport x runway": ["AIRPORT", "RUNWAY_mvt"],
+        "mean per airport x stand x runway": ["AIRPORT", "STAND_mvt", "RUNWAY_mvt"],
+        "mean per airport x stand x runway x hour": ["AIRPORT", "STAND_mvt", "RUNWAY_mvt", "hour"],
     }
     gmean = tr_part["TAXITIME_SEC_mvt"].mean()
     for name, keys in baselines.items():
@@ -176,8 +176,8 @@ def cmd_diagnose(args):
             pred = np.where(np.isnan(pred), gmean, pred)
         rmse = np.sqrt(np.mean((pred - va_part["TAXITIME_SEC_mvt"].to_numpy()) ** 2))
         print("  %-42s RMSE %.1f s" % (name, rmse))
-    print("\nnote : ces baselines sont calibrees janvier -> juillet, donc pessimistes. "
-          "Elles donnent malgre tout l'ordre de grandeur a battre.")
+    print("\nnote: these baselines are calibrated January -> July, hence pessimistic. "
+          "They still give the order of magnitude to beat.")
 
 
 # --------------------------------------------------------------------------- metar
@@ -193,7 +193,7 @@ def cmd_metar(args):
     for icao in AIRPORTS:
         dest = os.path.join(outdir, "%s.csv" % icao)
         if os.path.exists(dest) and not args.force:
-            print("  %s deja en cache" % icao)
+            print("  %s already cached" % icao)
             continue
         params = {
             "station": icao, "network": METAR_NETWORK[icao],
@@ -203,7 +203,7 @@ def cmd_metar(args):
             "tz": "UTC", "format": "onlycomma", "latlon": "no",
             "missing": "empty", "trace": "0.0001", "direct": "no", "report_type": [3, 4],
         }
-        print("  telechargement %s" % icao)
+        print("  downloading %s" % icao)
         for attempt in range(3):
             try:
                 r = requests.get(base, params=params, timeout=180)
@@ -212,11 +212,11 @@ def cmd_metar(args):
                     fh.write(r.text)
                 break
             except Exception as exc:  # noqa: BLE001
-                print("    echec (%s), nouvelle tentative" % exc)
+                print("    failed (%s), retrying" % exc)
                 time.sleep(5)
         else:
-            print("    abandon pour %s" % icao)
-    print("METAR en cache dans %s" % outdir)
+            print("    giving up on %s" % icao)
+    print("METAR cached in %s" % outdir)
 
 
 def load_metar(data_dir):
@@ -253,7 +253,7 @@ def load_metar(data_dir):
     m["wx_fog"] = wx.str.contains("FG|BR", regex=True).astype(np.int8)
     m["lvp"] = ((m.get("vsby", pd.Series(np.nan, index=m.index)) < 0.5)
                 | (m.get("skyl1", pd.Series(np.nan, index=m.index)) < 200)).astype(np.int8)
-    # potentiel de degivrage : temperature basse et humidite ou precipitation
+    # de-icing potential: low temperature and humidity or precipitation
     m["deice_risk"] = ((m["temp_c"] < 3) & ((m["wx_snow"] == 1) | (m["wx_freezing"] == 1)
                                             | (m["wx_rain"] == 1)
                                             | (m["temp_c"] - m["dew_c"] < 3))).astype(np.int8)
@@ -265,9 +265,9 @@ def load_metar(data_dir):
 
 
 def as_ns(s):
-    """Force une serie datetime en datetime64[ns, UTC].
+    """Forces a datetime series to datetime64[ns, UTC].
 
-    Les parquet du challenge sont en microsecondes et les METAR parses en
+    The challenge parquet files are in microseconds and the parsed METARs in
     nanosecondes : merge_asof refuse deux unites differentes.
     """
     v = pd.to_datetime(s, errors="coerce", utc=True)
@@ -279,7 +279,7 @@ def as_ns(s):
 
 
 def merge_metar(df, metar):
-    """Jointure asof (dernier releve connu) par aeroport."""
+    """As-of join (last known report) per airport."""
     if metar is None:
         return df
     df = df.copy()
@@ -310,14 +310,14 @@ def merge_metar(df, metar):
 # ------------------------------------------------------------------ features temps
 
 def window_count(events, queries, before_s, after_s):
-    """Nombre d'evenements dans [q - before, q + after]. events doit etre trie."""
+    """Number of events in [q - before, q + after]. events must be sorted."""
     lo = np.searchsorted(events, queries - before_s, side="left")
     hi = np.searchsorted(events, queries + after_s, side="right")
     return (hi - lo).astype(np.float32)
 
 
 def causal_mean(event_t, event_v, queries, window_s):
-    """Moyenne des valeurs d'evenements dans ]q - window, q]."""
+    """Mean of the event values in ]q - window, q]."""
     order = np.argsort(event_t)
     t = event_t[order]
     v = event_v[order]
@@ -332,7 +332,7 @@ def causal_mean(event_t, event_v, queries, window_s):
 
 
 def prev_gap(events, queries):
-    """Ecart au dernier evenement strictement anterieur."""
+    """Gap to the last strictly earlier event."""
     idx = np.searchsorted(events, queries, side="left") - 1
     out = np.full(len(queries), np.nan, dtype=np.float32)
     ok = idx >= 0
@@ -341,7 +341,7 @@ def prev_gap(events, queries):
 
 
 def add_congestion(df):
-    """Features de congestion ancrees sur l'heure de decollage (connue au test)."""
+    """Congestion features anchored on the takeoff time (known at test time)."""
     n = len(df)
     cols = {k: np.full(n, np.nan, dtype=np.float32) for k in [
         "dep_cnt_15", "dep_cnt_30", "dep_cnt_60", "dep_cnt_ahead_15",
@@ -373,14 +373,14 @@ def add_congestion(df):
         with np.errstate(invalid="ignore", divide="ignore"):
             cols["dep_arr_ratio_60"][idx] = (cols["dep_cnt_60"][idx]
                                              / np.maximum(cols["arr_cnt_60"][idx], 1))
-        # taxi-in observe des arrivees : proxy direct de l'etat de la surface
+        # observed taxi-in of arrivals: direct proxy of the state of the surface
         arr_idx = idx[~is_dep[idx]]
         if arr_idx.size:
             ev_t = np.where(np.isfinite(t_block[arr_idx]), t_block[arr_idx], t[arr_idx])
             ev_v = taxi[arr_idx]
             cols["taxiin_mean_60"][idx] = causal_mean(ev_t, ev_v, tt, 3600)
             cols["taxiin_mean_180"][idx] = causal_mean(ev_t, ev_v, tt, 10800)
-        # par piste
+        # per runway
         for r in pd.unique(rwy[idx]):
             sub = idx[rwy[idx] == r]
             if sub.size == 0:
@@ -398,11 +398,11 @@ def add_congestion(df):
 
 
 def add_queue(df):
-    """File d'attente au depart et sequence de decollage.
+    """Departure queue and takeoff sequence.
 
-    Tout est ancre sur des colonnes disponibles en 2026 : l'heure de decollage,
-    l'heure programmee et l'EOBT. On ne se sert jamais du block time, masque
-    pour les departs du fichier de ranking.
+    Everything is anchored on columns available in 2026: the takeoff time,
+    the scheduled time and the EOBT. The block time, masked for the
+    departures of the ranking file, is never used.
     """
     n = len(df)
     keys = ["q_eobt", "q_sched", "q_eobt_rwy", "rate_rwy_15", "gap_mean_5_rwy",
@@ -431,8 +431,8 @@ def add_queue(df):
         a_idx = idx[~is_dep[idx]]
         dep_t = np.sort(t[d_idx])
 
-        # nombre de vols dont le repoussage etait prevu avant t et qui n'ont pas
-        # encore decolle : une mesure directe de la file, calculable au test
+        # number of flights whose pushback was planned before t and that have not
+        # taken off yet: a direct measure of the queue, computable at test time
         for src, name in [(eobt, "q_eobt"), (sched, "q_sched")]:
             v = np.sort(src[d_idx][np.isfinite(src[d_idx])])
             if v.size == 0:
@@ -451,21 +451,21 @@ def add_queue(df):
             d_sub = d_sub[order]
             dr = t[d_sub]
 
-            # file par piste
+            # queue per runway
             v = np.sort(eobt[d_sub][np.isfinite(eobt[d_sub])])
             if v.size:
                 cols["q_eobt_rwy"][sub] = np.maximum(
                     np.searchsorted(v, ts, side="right")
                     - np.searchsorted(dr, ts, side="right"), 0).astype(np.float32)
 
-            # debit observe de la piste
+            # observed runway throughput
             cnt15 = (np.searchsorted(dr, ts, side="right")
                      - np.searchsorted(dr, ts - 900, side="left"))
             cols["rate_rwy_15"][sub] = (cnt15 / 15.0).astype(np.float32)
 
             if dr.size >= 2:
                 gaps = np.diff(dr)
-                # ecart au decollage precedent et moyenne des cinq derniers ecarts
+                # gap to the previous takeoff and mean of the last five gaps
                 pos = np.searchsorted(dr, ts, side="left") - 1
                 ok = pos >= 1
                 g1 = np.full(ts.shape, np.nan, dtype=np.float32)
@@ -479,8 +479,8 @@ def add_queue(df):
                 g5[good] = ((csum[pos[good]] - csum[lo[good]]) / cnt[good])
                 cols["gap_mean_5_rwy"][sub] = g5
 
-                # longueur de la rafale : decollages consecutifs espaces de moins
-                # de deux minutes, ce qui caracterise une file qui se vide
+                # length of the burst: consecutive takeoffs less than two minutes
+                # apart, which characterizes a queue being emptied
                 burst = np.zeros(dr.size, dtype=np.float32)
                 for i in range(1, dr.size):
                     burst[i] = burst[i - 1] + 1 if gaps[i - 1] < 120 else 0.0
@@ -488,13 +488,13 @@ def add_queue(df):
                 bpos[pos >= 0] = burst[pos[pos >= 0]]
                 cols["burst_pos"][sub] = bpos
 
-                # categorie de sillage du decollage precedent
+                # wake category of the previous takeoff
                 pw = np.full(ts.shape, "NA", dtype=object)
                 pw[pos >= 0] = wake[d_sub][pos[pos >= 0]]
                 wake_pair[sub] = pd.Series(pw).astype(str) + ">" + pd.Series(wake[sub]).astype(str)
                 cols["wake_prev_gap"][sub] = g1
 
-            # arrivees sur la meme piste : mode mixte
+            # arrivals on the same runway: mixed mode
             ar = np.sort(t[a_idx[rwy[a_idx] == r]]) if a_idx.size else np.array([])
             if ar.size:
                 cols["arr_same_rwy_30"][sub] = window_count(ar, ts, 1800, 1800)
@@ -506,7 +506,7 @@ def add_queue(df):
 
 
 def add_config(df):
-    """Configuration de pistes deduite par tranche de 30 min, arrivees et departs."""
+    """Runway configuration inferred per 30-min slot, arrivals and departures."""
     bucket = np.floor(df["t"].to_numpy(dtype=float) / 1800.0)
     df["_bucket"] = bucket
     out = df[["AIRPORT", "_bucket"]].copy()
@@ -589,13 +589,13 @@ def apply_target_stats(df, stats, keys, prefix, prior_mean):
 # --------------------------------------------------------------------- construction
 
 def build(df, metar=None):
-    print("  calendrier et plan de vol")
+    print("  calendar and flight plan")
     df = add_calendar_and_plan(df)
-    print("  configuration de pistes")
+    print("  runway configuration")
     df = add_config(df)
     print("  congestion")
     df = add_congestion(df)
-    print("  file d'attente et sequence de decollage")
+    print("  departure queue and takeoff sequence")
     df = add_queue(df)
     if metar is not None:
         print("  meteo")
@@ -629,36 +629,36 @@ def prepare_matrix(df, cat_maps=None):
     return X, maps, feats
 
 
-EXTREME_THR = 20000.0  # au-dela, le label est un defaut d'horaire, pas un roulage
+EXTREME_THR = 20000.0  # above this, the label is a schedule artifact, not a taxi
 
 
 def match_state(df):
-    """Trois populations distinctes, que le mouvement soit apparie ou non a NM.
+    """Three distinct populations, depending on whether the movement is matched to NM.
 
-    La jointure a gauche laisse toutes les colonnes _flt nulles pour un
-    mouvement jamais apparie : ce n'est pas la meme chose qu'un vol apparie
-    dont l'heure d'off-block reelle manque.
+    The left join leaves all _flt columns null for a movement that was
+    never matched: this is not the same as a matched flight
+    whose actual off-block time is missing.
     """
     unmatched = df["FLIGHT_ID_mvt"].isna() if "FLIGHT_ID_mvt" in df.columns \
         else pd.Series(False, index=df.index)
     no_aobt = df["AOBT_3_flt"].isna() if "AOBT_3_flt" in df.columns \
         else pd.Series(True, index=df.index)
-    out = pd.Series("apparie avec AOBT", index=df.index, dtype=object)
-    out[no_aobt & ~unmatched] = "apparie sans AOBT"
-    out[unmatched] = "non apparie NM"
+    out = pd.Series("matched with AOBT", index=df.index, dtype=object)
+    out[no_aobt & ~unmatched] = "matched without AOBT"
+    out[unmatched] = "not matched to NM"
     return out
 
 
 def lane_mask(df):
-    """Voie sans heure d'off-block NM : c'est la ou vivent les labels par defaut."""
+    """Lane without an NM off-block time: this is where the default labels live."""
     if "d_aobt3" not in df.columns:
         return pd.Series(False, index=df.index)
     return df["d_aobt3"].isna()
 
 
 def fit_mixture(fit_df, y_fit, lane_fit, prior_weight=30):
-    """Par aeroport, sur la voie sans off-block NM : proportion de labels par
-    defaut et moyenne de chaque composante. Renvoie un dict aeroport -> params."""
+    """Per airport, on the lane without an NM off-block: share of default labels
+    and mean of each component. Returns a dict airport -> params."""
     out = {}
     idx = np.flatnonzero(lane_fit)
     if idx.size == 0:
@@ -683,7 +683,7 @@ def fit_mixture(fit_df, y_fit, lane_fit, prior_weight=30):
 
 
 def apply_mixture(pred, df, lane, mix):
-    """Sur la voie concernee, remplace la prediction par la moyenne du melange."""
+    """On the lane concerned, replaces the prediction with the mixture mean."""
     if not mix:
         return pred, 0
     pred = pred.copy()
@@ -704,14 +704,14 @@ def apply_mixture(pred, df, lane, mix):
 
 
 def cmd_outliers(args):
-    """Analyse un aeroport a forte erreur : d'ou vient la variance de la cible."""
+    """Analyzes an airport with a high error: where does the target variance come from?"""
     ap = args.airport
-    print("lecture du training complet")
+    print("reading the full training set")
     tr = load_training(args.data)
     dep = tr[tr["PHASE_mvt"].eq("DEP") & tr["TAXITIME_SEC_mvt"].notna()].copy()
     dep["TAXITIME_SEC_mvt"] = dep["TAXITIME_SEC_mvt"].astype(float)
 
-    print("\n--- distribution de la cible par aeroport (2025) ---")
+    print("\n--- target distribution per airport (2025) ---")
     g = dep.groupby("AIRPORT")["TAXITIME_SEC_mvt"]
     tab = pd.DataFrame({
         "n": g.size(), "moy": g.mean(), "med": g.median(), "ecart_type": g.std(),
@@ -725,45 +725,45 @@ def cmd_outliers(args):
 
     sub = dep[dep["AIRPORT"].eq(ap)].copy()
     if sub.empty:
-        sys.exit("aucun depart pour %s" % ap)
-    print("\n--- %s : %d departs ---" % (ap, len(sub)))
-    sub["mois"] = sub["MVT_TIME_UTC_mvt"].dt.month
-    sub["heure"] = sub["MVT_TIME_UTC_mvt"].dt.hour
+        sys.exit("no departure for %s" % ap)
+    print("\n--- %s: %d departures ---" % (ap, len(sub)))
+    sub["mvt_month"] = sub["MVT_TIME_UTC_mvt"].dt.month
+    sub["mvt_hour"] = sub["MVT_TIME_UTC_mvt"].dt.hour
     sub["extreme"] = (sub["TAXITIME_SEC_mvt"] > 3600).astype(float)
 
-    for by, label in [("mois", "mois"), ("heure", "heure")]:
+    for by, label in [("mvt_month", "month"), ("mvt_hour", "hour")]:
         gg = sub.groupby(by)["TAXITIME_SEC_mvt"]
         t = pd.DataFrame({"n": gg.size(), "moy": gg.mean(), "med": gg.median(),
                           "ecart_type": gg.std(),
                           "pct_sup_3600": 100 * sub.groupby(by)["extreme"].mean()})
-        print("\npar %s :" % label)
+        print("\nby %s:" % label)
         print(t.round(1).to_string())
 
-    print("\npistes les plus dispersees :")
+    print("\nmost dispersed runways:")
     gr = sub.groupby("RUNWAY_mvt")["TAXITIME_SEC_mvt"]
     tr_tab = pd.DataFrame({"n": gr.size(), "moy": gr.mean(), "ecart_type": gr.std()})
     print(tr_tab[tr_tab["n"] > 200].sort_values("ecart_type", ascending=False)
           .head(10).round(1).to_string())
 
-    # les arrivees 2026 ne sont pas masquees : meme pathologie l'annee suivante ?
+    # 2026 arrivals are not masked: same pathology the following year?
     rk = load_ranking(args.data)
     arr26 = rk[rk["PHASE_mvt"].eq("ARR") & rk["AIRPORT"].eq(ap)]["TAXITIME_SEC_mvt"].astype(float)
     arr25 = tr[tr["PHASE_mvt"].eq("ARR") & tr["AIRPORT"].eq(ap)]["TAXITIME_SEC_mvt"].astype(float)
-    print("\n--- taxi-in a %s, 2025 vs 2026 (les arrivees ne sont pas masquees) ---" % ap)
+    print("\n--- taxi-in at %s, 2025 vs 2026 (arrivals are not masked) ---" % ap)
     for name, s in [("2025", arr25.dropna()), ("2026 janv+juil", arr26.dropna())]:
         if len(s):
-            print("  %-16s n=%7d  moy %6.0f  med %6.0f  ecart-type %6.0f  "
+            print("  %-16s n=%7d  mean %6.0f  med %6.0f  std %6.0f  "
                   "p99 %6.0f  pct>3600 %.2f %%"
                   % (name, len(s), s.mean(), s.median(), s.std(), s.quantile(0.99),
                      100 * (s > 3600).mean()))
 
-    # un estimateur trivial fait-il mieux que le modele sur cet aeroport ?
-    print("\n--- estimateurs simples sur %s (entraine hors janv/juil, teste sur janv+juil) ---" % ap)
-    m = sub["mois"]
+    # does a trivial estimator beat the model at this airport?
+    print("\n--- simple estimators at %s (trained outside Jan/Jul, tested on Jan+Jul) ---" % ap)
+    m = sub["mvt_month"]
     fit = sub[~m.isin([1, 7])]
     test = sub[m.isin([1, 7])]
     if len(fit) < 500 or len(test) < 500:
-        print("  pas assez de donnees")
+        print("  not enough data")
         return
     yt = test["TAXITIME_SEC_mvt"].to_numpy()
 
@@ -773,24 +773,24 @@ def cmd_outliers(args):
     gmean = fit["TAXITIME_SEC_mvt"].mean()
     gmed = fit["TAXITIME_SEC_mvt"].median()
     wins = fit["TAXITIME_SEC_mvt"].clip(upper=fit["TAXITIME_SEC_mvt"].quantile(0.99)).mean()
-    print("  moyenne globale            RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), gmean)), gmean))
-    print("  mediane globale            RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), gmed)), gmed))
-    print("  moyenne winsorisee p99     RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), wins)), wins))
-    for keys, name in [(["STAND_mvt", "RUNWAY_mvt"], "moyenne stand x piste"),
-                       (["RUNWAY_mvt", "heure"], "moyenne piste x heure"),
-                       (["STAND_mvt", "RUNWAY_mvt", "heure"], "moyenne stand x piste x heure")]:
+    print("  global mean                RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), gmean)), gmean))
+    print("  global median              RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), gmed)), gmed))
+    print("  winsorized mean p99        RMSE %8.1f s  (pred %.0f)" % (rmse(np.full(len(test), wins)), wins))
+    for keys, name in [(["STAND_mvt", "RUNWAY_mvt"], "mean per stand x runway"),
+                       (["RUNWAY_mvt", "mvt_hour"], "mean per runway x hour"),
+                       (["STAND_mvt", "RUNWAY_mvt", "mvt_hour"], "mean per stand x runway x hour")]:
         mp = fit.groupby(keys, dropna=False)["TAXITIME_SEC_mvt"].mean()
         p = test.set_index(keys).index.map(mp).to_numpy(dtype=float)
         p = np.where(np.isnan(p), gmean, p)
         print("  %-26s RMSE %8.1f s" % (name, rmse(p)))
-    print("\nlecture : si la moyenne globale approche les estimateurs structures, la cible")
-    print("de cet aeroport est majoritairement du bruit et il vaut mieux y predire une")
-    print("moyenne conditionnelle prudente que chercher a expliquer la variance.")
+    print("\nreading: if the global mean comes close to the structured estimators, the target")
+    print("at this airport is mostly noise, and a cautious conditional mean is a better")
+    print("prediction than trying to explain the variance.")
 
 
 def rule_candidates(df, thr, require_no_type=False, airports=None,
                     require_unmatched=False):
-    """Lignes suspectees d'avoir un label recalcule sur l'heure programmee."""
+    """Rows suspected of having a label recomputed from the scheduled time."""
     ds = df["d_sched"] if "d_sched" in df.columns else pd.Series(np.nan, index=df.index)
     cand = lane_mask(df) & (ds > thr)
     if require_no_type and "AIRCRAFT_TYPE_mvt" in df.columns:
@@ -805,21 +805,21 @@ def rule_candidates(df, thr, require_no_type=False, airports=None,
 RULE_VARIANTS = [
     ("base", dict()),
     ("+ type avion vide", dict(require_no_type=True)),
-    ("+ non apparie NM", dict(require_no_type=True, require_unmatched=True)),
-    ("+ Rome seul", dict(require_no_type=True, require_unmatched=True,
+    ("+ not matched to NM", dict(require_no_type=True, require_unmatched=True)),
+    ("+ Rome only", dict(require_no_type=True, require_unmatched=True,
                          airports=["LIRF"])),
 ]
 
 
 def cmd_dayshift(args):
-    """Famille des labels decales d'un jour : sont-ils reconstructibles ?
+    """Family of labels shifted by one day: can they be reconstructed?
 
-    La regle y = MVT_TIME - SCHED_TIME couvre 76 % des labels aberrants.
-    Le reste se concentre autour de 86 400 s : le block time semble valoir
-    une heure de reference diminuee d'un jour entier. Si le decalage est
-    exactement 86 400 s, ces lignes se recalculent aussi.
+    The rule y = MVT_TIME - SCHED_TIME covers 76 % of the aberrant labels.
+    The rest is concentrated around 86,400 s: the block time seems to equal
+    a reference time minus one whole day. If the shift is
+    exactly 86,400 s, these rows can be recomputed too.
     """
-    print("lecture du training complet")
+    print("reading the full training set")
     tr = load_training(args.data)
     dep = tr[tr["PHASE_mvt"].eq("DEP") & tr["TAXITIME_SEC_mvt"].notna()].copy()
     dep["TAXITIME_SEC_mvt"] = dep["TAXITIME_SEC_mvt"].astype(float)
@@ -830,24 +830,24 @@ def cmd_dayshift(args):
     ext = y > args.thr
     by_rule = np.abs(y - ds) < 120
     rest = ext & ~by_rule
-    print("\nlabels > %d s : %d" % (args.thr, int(ext.sum())))
-    print("  couverts par y = MVT_TIME - SCHED_TIME : %d" % int((ext & by_rule).sum()))
-    print("  restants : %d" % int(rest.sum()))
+    print("\nlabels > %d s: %d" % (args.thr, int(ext.sum())))
+    print("  covered by y = MVT_TIME - SCHED_TIME: %d" % int((ext & by_rule).sum()))
+    print("  remaining: %d" % int(rest.sum()))
     if rest.sum() == 0:
         return
     sub = dep[rest].copy()
 
-    print("\ndistribution des restants :")
+    print("\ndistribution of the remaining rows:")
     v = sub["TAXITIME_SEC_mvt"]
-    print("  min %.0f s, mediane %.0f s, max %.0f s" % (v.min(), v.median(), v.max()))
-    print("  dans [80000, 95000] : %d / %d"
+    print("  min %.0f s, median %.0f s, max %.0f s" % (v.min(), v.median(), v.max()))
+    print("  in [80000, 95000]: %d / %d"
           % (int(((v >= 80000) & (v <= 95000)).sum()), len(v)))
-    print("  par aeroport : %s" % dict(sub["AIRPORT"].value_counts()))
+    print("  per airport: %s" % dict(sub["AIRPORT"].value_counts()))
 
-    # y - 86400 vaut-il un delta planifie connu ?
-    print("\ny - 86400 compare a chaque delta planifie :")
+    # is y - 86400 equal to a known scheduled delta?
+    print("\ny - 86400 compared with each scheduled delta:")
     resid = sub["TAXITIME_SEC_mvt"] - 86400.0
-    print("  y - 86400 : mediane %.0f s, min %.0f s, max %.0f s"
+    print("  y - 86400: median %.0f s, min %.0f s, max %.0f s"
           % (resid.median(), resid.min(), resid.max()))
     for c in ["d_sched", "d_eobt", "d_iobt", "d_lobt", "d_aobt3"]:
         if c not in sub.columns:
@@ -855,11 +855,11 @@ def cmd_dayshift(args):
         d = (resid - sub[c]).dropna()
         if len(d) < 2:
             continue
-        print("  (y - 86400) - %-9s n=%3d  mediane %8.0f s  |ecart|<120 s sur %3d"
+        print("  (y - 86400) - %-9s n=%3d  median %8.0f s  |gap|<120 s for %3d"
               % (c, len(d), d.median(), int((d.abs() < 120).sum())))
 
-    # le decalage est-il exactement un nombre entier de jours ?
-    print("\ndecalage en jours entiers :")
+    # is the shift exactly a whole number of days?
+    print("\nshift in whole days:")
     for k in (1, 2, 3):
         cand = sub["TAXITIME_SEC_mvt"] - 86400.0 * k
         for c in ["d_sched", "d_eobt"]:
@@ -868,29 +868,29 @@ def cmd_dayshift(args):
             d = (cand - sub[c]).dropna()
             hit = int((d.abs() < 120).sum())
             if hit:
-                print("  y - %d jour(s) = %-9s sur %d / %d lignes" % (k, c, hit, len(d)))
+                print("  y - %d day(s) = %-9s for %d / %d rows" % (k, c, hit, len(d)))
 
     cols = ["AIRPORT", "MVT_TIME_UTC_mvt", "BLOCK_TIME_UTC_mvt", "SCHED_TIME_UTC_mvt",
             "TAXITIME_SEC_mvt", "d_sched", "d_eobt", "STAND_mvt", "RUNWAY_mvt"]
     cols = [c for c in cols if c in sub.columns]
-    print("\nles lignes restantes :")
+    print("\nthe remaining rows:")
     with pd.option_context("display.width", 250, "display.max_columns", 30):
         print(sub[cols].to_string())
 
-    print("\ncandidats dans le ranking 2026 : lignes non appariees NM, type avion vide,")
-    print("dont l'heure programmee est anterieure de plus de 20 h au decollage")
+    print("\ncandidates in the 2026 ranking: rows not matched to NM, empty aircraft type,")
+    print("with a scheduled time more than 20 h before takeoff")
     rk = load_ranking(args.data)
     rdep = add_calendar_and_plan(rk[rk["PHASE_mvt"].eq("DEP")].copy())
     c = (rdep["FLIGHT_ID_mvt"].isna() & rdep["AIRCRAFT_TYPE_mvt"].isna()
          & (rdep["d_sched"] > 72000))
-    print("  %d lignes" % int(c.sum()))
+    print("  %d rows" % int(c.sum()))
     if int(c.sum()):
-        print("  par aeroport : %s" % dict(rdep.loc[c, "AIRPORT"].value_counts()))
+        print("  per airport: %s" % dict(rdep.loc[c, "AIRPORT"].value_counts()))
 
 
 def cmd_rule(args):
-    """Mesure precision et rappel de la regle y = MVT_TIME - SCHED_TIME."""
-    print("lecture du training complet")
+    """Measures the precision and recall of the rule y = MVT_TIME - SCHED_TIME."""
+    print("reading the full training set")
     tr = load_training(args.data)
     dep = tr[tr["PHASE_mvt"].eq("DEP") & tr["TAXITIME_SEC_mvt"].notna()].copy()
     dep["TAXITIME_SEC_mvt"] = dep["TAXITIME_SEC_mvt"].astype(float)
@@ -898,19 +898,19 @@ def cmd_rule(args):
     y = dep["TAXITIME_SEC_mvt"].to_numpy()
     ds = dep["d_sched"].to_numpy(dtype=float)
 
-    # verite : le label vaut l'ecart a l'heure programmee, et il est aberrant
+    # ground truth: the label equals the gap to the scheduled time, and it is aberrant
     is_default = (np.abs(y - ds) < args.tol) & (y > args.thr_extreme)
-    print("\nlabels reconstructibles par y = MVT_TIME - SCHED_TIME : %d"
+    print("\nlabels reconstructible by y = MVT_TIME - SCHED_TIME: %d"
           % int(is_default.sum()))
-    print("labels aberrants au total (> %d s) : %d"
+    print("total aberrant labels (> %d s): %d"
           % (args.thr_extreme, int((y > args.thr_extreme).sum())))
-    print("part des aberrants couverte par la regle : %.1f %%"
+    print("share of the aberrant labels covered by the rule: %.1f %%"
           % (100 * is_default.sum() / max((y > args.thr_extreme).sum(), 1)))
 
     normal_pred = float(np.median(y[y < 3600]))
-    print("\nvaleur de repli utilisee pour la comparaison : %.0f s" % normal_pred)
-    print("\n%-9s %8s %8s %8s %10s %12s" % ("seuil", "cand.", "vrais", "precision",
-                                            "rappel", "gain RMSE"))
+    print("\nfallback value used for the comparison: %.0f s" % normal_pred)
+    print("\n%-9s %8s %8s %8s %10s %12s" % ("threshold", "cand.", "true", "precision",
+                                            "recall", "RMSE gain"))
     n_total = len(y)
     for thr in args.grid:
         cand = rule_candidates(dep, thr)
@@ -921,34 +921,34 @@ def cmd_rule(args):
         n_true = int((cand & is_default).sum())
         prec = n_true / n_c
         rec = n_true / max(is_default.sum(), 1)
-        # erreur si on applique la regle, versus si on predit le repli
+        # error if the rule is applied, versus predicting the fallback
         sq_rule = float(np.sum((ds[cand] - y[cand]) ** 2))
         sq_base = float(np.sum((normal_pred - y[cand]) ** 2))
         gain = (np.sqrt(sq_base / n_total) ** 2 - np.sqrt(sq_rule / n_total) ** 2)
         gain_rmse = np.sqrt(max(sq_base, 0) / n_total) - np.sqrt(max(sq_rule, 0) / n_total)
         print("%-9d %8d %8d %8.3f %10.3f %10.1f s"
               % (thr, n_c, n_true, prec, rec, gain_rmse))
-    print("\nlecture : le gain indique la reduction de RMSE apportee par la regle sur")
-    print("ces lignes seules, rapportee a l'ensemble des departs. Un seuil utile combine")
-    print("une precision elevee et un gain positif. Une precision faible veut dire que")
-    print("la regle ecrase des lignes normales et coute plus qu'elle ne rapporte.")
+    print("\nreading: the gain is the RMSE reduction brought by the rule on these")
+    print("rows alone, relative to all departures. A useful threshold combines")
+    print("a high precision and a positive gain. A low precision means that")
+    print("the rule overwrites normal rows and costs more than it brings.")
 
-    # variante douce : predire l'esperance au lieu de trancher.
-    # p est estime hors janvier et juillet, le gain est mesure sur janvier et juillet.
-    mois = dep["MVT_TIME_UTC_mvt"].dt.month.to_numpy()
-    fit_m = ~np.isin(mois, [1, 7])
-    ev_m = np.isin(mois, [1, 7])
+    # soft variant: predict the expectation instead of deciding.
+    # p is estimated outside January and July, the gain is measured on January and July.
+    mvt_month = dep["MVT_TIME_UTC_mvt"].dt.month.to_numpy()
+    fit_m = ~np.isin(mvt_month, [1, 7])
+    ev_m = np.isin(mvt_month, [1, 7])
     n_ev = int(ev_m.sum())
     print("\nvariante douce : prediction = p x d_sched + (1-p) x repli")
-    print("p estime hors janv/juil, gain mesure sur janv+juil (%d departs)" % n_ev)
-    print("le repli imite le modele : moyenne des labels normaux du meme aeroport")
+    print("p estimated outside Jan/Jul, gain measured on Jan+Jul (%d departures)" % n_ev)
+    print("the fallback mimics the model: mean of the normal labels of the same airport")
     fallback = dep.groupby("AIRPORT")["TAXITIME_SEC_mvt"].transform(
         lambda s: s[s < 3600].mean()).to_numpy(dtype=float)
     fallback = np.where(np.isfinite(fallback), fallback, normal_pred)
     for vname, kw in RULE_VARIANTS:
-        print("\n  variante %s" % vname)
+        print("\n  variant %s" % vname)
         print("  %-9s %8s %8s %10s %12s %12s"
-              % ("seuil", "p", "cand.ev", "vrais.ev", "gain dur", "gain doux"))
+              % ("threshold", "p", "cand.ev", "true.ev", "hard gain", "soft gain"))
         for thr in args.grid:
             cand = rule_candidates(dep, thr, **kw)
             c_fit = cand & fit_m
@@ -966,133 +966,133 @@ def cmd_rule(args):
                   % (thr, p, int(c_ev.sum()), int((c_ev & is_default).sum()),
                      g_hard, g_soft))
 
-    # qu'est-ce qui separe les vrais defauts des faux candidats ?
+    # what separates the true defaults from the false candidates?
     thr_sep = args.sep_thr
     cand = rule_candidates(dep, thr_sep)
     vrais = dep[cand & is_default]
     faux = dep[cand & ~is_default]
-    print("\n--- separation vrais / faux candidats au seuil %d (%d vs %d) ---"
+    print("\n--- separating true / false candidates at threshold %d (%d vs %d) ---"
           % (thr_sep, len(vrais), len(faux)))
     if len(vrais) >= 5 and len(faux) >= 5:
         st_v = match_state(vrais).value_counts(normalize=True)
         st_f = match_state(faux).value_counts(normalize=True)
-        print("  etat d'appariement NM :")
-        for k in ["non apparie NM", "apparie sans AOBT", "apparie avec AOBT"]:
-            print("    %-20s vrais %5.1f %%   faux %5.1f %%"
+        print("  NM matching state:")
+        for k in ["not matched to NM", "matched without AOBT", "matched with AOBT"]:
+            print("    %-20s true %5.1f %%   false %5.1f %%"
                   % (k, 100 * st_v.get(k, 0.0), 100 * st_f.get(k, 0.0)))
-        # un decalage d'un jour entier laisse d_sched proche d'un multiple de 86400
+        # a shift of a whole day leaves d_sched close to a multiple of 86400
         for name, sset in [("vrais", vrais), ("faux", faux)]:
             r = (sset["d_sched"] % 86400.0)
             near = ((r < 1800) | (r > 84600)).mean()
-            print("  %-6s d_sched proche d'un multiple de 24 h : %.1f %%"
+            print("  %-6s d_sched close to a multiple of 24 h: %.1f %%"
                   % (name, 100 * near))
         for c in ["hour", "dow", "d_sched"]:
             if c in dep.columns:
-                print("  %-22s vrais med %10.0f   faux med %10.0f"
+                print("  %-22s true med %10.0f   false med %10.0f"
                       % (c, vrais[c].median(), faux[c].median()))
         for c in ["AIRCRAFT_OPERATOR_flt", "STAND_mvt", "RUNWAY_mvt", "ADES_mvt",
                   "MARKET_SEGMENT_flt", "WK_TBL_CAT_flt", "FLIGHT_TYPE_flt",
                   "AIRCRAFT_TYPE_mvt", "EOBT_1_flt", "LOBT_flt", "IOBT_flt"]:
             if c not in dep.columns:
                 continue
-            print("  %-22s vide : vrais %5.1f %%   faux %5.1f %%"
+            print("  %-22s empty: true %5.1f %%   false %5.1f %%"
                   % (c, 100 * vrais[c].isna().mean(), 100 * faux[c].isna().mean()))
         for c in ["AIRPORT", "MARKET_SEGMENT_flt", "FLIGHT_TYPE_flt"]:
             if c not in dep.columns:
                 continue
             a = vrais[c].astype(str).value_counts(normalize=True).head(4)
             b = faux[c].astype(str).value_counts(normalize=True).head(4)
-            print("  %s : vrais %s | faux %s"
+            print("  %s: true %s | false %s"
                   % (c, dict(a.round(2)), dict(b.round(2))))
         sc = pd.to_datetime(dep["SCHED_TIME_UTC_mvt"], errors="coerce", utc=True)
-        print("  heure programmee a la minute ronde : vrais %.1f %%   faux %.1f %%"
+        print("  scheduled time on a round minute: true %.1f %%   false %.1f %%"
               % (100 * (sc[cand & is_default].dt.second == 0).mean(),
                  100 * (sc[cand & ~is_default].dt.second == 0).mean()))
     else:
-        print("  effectifs insuffisants pour comparer")
+        print("  not enough rows to compare")
 
-    # la meme population existe-t-elle en 2026 ?
+    # does the same population exist in 2026?
     rk = load_ranking(args.data)
     rdep = rk[rk["PHASE_mvt"].eq("DEP")].copy()
     rdep = add_calendar_and_plan(rdep)
-    print("\ncandidats dans le fichier de ranking 2026 :")
+    print("\ncandidates in the 2026 ranking file:")
     for vname, kw in RULE_VARIANTS:
-        print("  variante %s" % vname)
+        print("  variant %s" % vname)
         for thr in args.grid:
             cand = rule_candidates(rdep, thr, **kw)
             n_c = int(cand.sum())
             if n_c:
                 v = rdep.loc[cand, "d_sched"]
-                print("    seuil %6d : %5d lignes, mediane %8.0f s, max %9.0f s, "
+                print("    threshold %6d: %5d rows, median %8.0f s, max %9.0f s, "
                       "dont LIRF %d" % (thr, n_c, v.median(), v.max(),
                                         int(rdep.loc[cand, "AIRPORT"].eq("LIRF").sum())))
             else:
-                print("    seuil %6d : aucune ligne" % thr)
-    print("\nsi les effectifs 2026 sont du meme ordre que 2025 rapportes au nombre de mois,")
-    print("la regle transfere. S'ils sont tres differents, le defaut a ete corrige et il")
-    print("ne faut rien appliquer.")
+                print("    threshold %6d: no row" % thr)
+    print("\nif the 2026 counts are of the same order as 2025, scaled to the number of months,")
+    print("the rule transfers. If they are very different, the defect was fixed and")
+    print("nothing should be applied.")
 
 
 def cmd_defaults(args):
-    """Inspecte les labels aberrants : sont-ils reconstructibles ?"""
-    print("lecture du training complet")
+    """Inspects the aberrant labels: can they be reconstructed?"""
+    print("reading the full training set")
     tr = load_training(args.data)
     dep = tr[tr["PHASE_mvt"].eq("DEP") & tr["TAXITIME_SEC_mvt"].notna()].copy()
     dep["TAXITIME_SEC_mvt"] = dep["TAXITIME_SEC_mvt"].astype(float)
     dep = add_calendar_and_plan(dep)
     y = dep["TAXITIME_SEC_mvt"]
     ext = dep[y > args.thr].copy()
-    print("\n%d labels > %d s sur %d departs (%.4f %%)"
+    print("\n%d labels > %d s out of %d departures (%.4f %%)"
           % (len(ext), args.thr, len(dep), 100 * len(ext) / len(dep)))
     if ext.empty:
         return
 
-    print("\npar aeroport :")
+    print("\nper airport:")
     print(ext.groupby("AIRPORT")["TAXITIME_SEC_mvt"]
           .agg(["size", "min", "median", "max"]).round(0).to_string())
-    print("\npar mois :")
+    print("\nper month:")
     print(ext.groupby(ext["MVT_TIME_UTC_mvt"].dt.month).size().to_string())
 
     lane = lane_mask(ext)
-    print("\nsans off-block NM : %d / %d" % (int(lane.sum()), len(ext)))
+    print("\nwithout NM off-block: %d / %d" % (int(lane.sum()), len(ext)))
 
-    # les valeurs se repetent-elles ? un defaut deterministe laisse des doublons
+    # do the values repeat? a deterministic defect leaves duplicates
     vals = ext["TAXITIME_SEC_mvt"].round(0)
     vc = vals.value_counts()
-    print("\nvaleurs les plus frequentes (repetition = defaut deterministe) :")
+    print("\nmost frequent values (repetition = deterministic defect):")
     print(vc.head(10).to_string())
-    print("valeurs distinctes : %d pour %d lignes" % (vals.nunique(), len(vals)))
+    print("distinct values: %d for %d rows" % (vals.nunique(), len(vals)))
 
-    # le block time implicite tombe-t-il sur une heure ronde ?
+    # does the implicit block time fall on a round hour?
     blk = ext["BLOCK_TIME_UTC_mvt"]
     if blk.notna().any():
-        print("\nblock time implicite : minute == 0 sur %.1f %%, seconde == 0 sur %.1f %%"
+        print("\nimplicit block time: minute == 0 for %.1f %%, second == 0 for %.1f %%"
               % (100 * (blk.dt.minute == 0).mean(), 100 * (blk.dt.second == 0).mean()))
-        print("heures les plus frequentes :")
+        print("most frequent hours:")
         print(blk.dt.hour.value_counts().head(6).to_string())
 
-    # y est-il une fonction simple d'une heure planifiee ?
-    print("\ny moins chaque delta planifie (une valeur quasi constante = reconstructible) :")
+    # is y a simple function of a scheduled time?
+    print("\ny minus each scheduled delta (an almost constant value = reconstructible):")
     for c in ["d_sched", "d_eobt", "d_iobt", "d_lobt", "d_aobt3"]:
         if c not in ext.columns:
             continue
         r = (ext["TAXITIME_SEC_mvt"] - ext[c]).dropna()
         if len(r) < 3:
             continue
-        print("  y - %-9s n=%4d  med %10.0f  ecart-type %10.0f  "
-              "ecart interquartile %10.0f" % (c, len(r), r.median(), r.std(),
+        print("  y - %-9s n=%4d  med %10.0f  std %10.0f  "
+              "interquartile range %10.0f" % (c, len(r), r.median(), r.std(),
                                               r.quantile(0.75) - r.quantile(0.25)))
 
     cols = ["AIRPORT", "MVT_TIME_UTC_mvt", "BLOCK_TIME_UTC_mvt", "TAXITIME_SEC_mvt",
             "d_sched", "d_eobt", "d_aobt3", "STAND_mvt", "RUNWAY_mvt",
             "AIRCRAFT_OPERATOR_flt", "ADES_mvt"]
     cols = [c for c in cols if c in ext.columns]
-    print("\npremieres lignes :")
+    print("\nfirst rows:")
     with pd.option_context("display.width", 250, "display.max_columns", 30):
         print(ext[cols].head(args.rows).to_string())
 
-    # ces lignes sont-elles separables du reste de leur voie ?
-    print("\ncomparaison avec les lignes normales de la meme voie :")
+    # can these rows be separated from the rest of their lane?
+    print("\ncomparison with the normal rows of the same lane:")
     lane_all = lane_mask(dep)
     normal = dep[lane_all & (y <= args.thr)]
     for c in ["d_sched", "d_eobt", "hour", "dow"]:
@@ -1102,11 +1102,11 @@ def cmd_defaults(args):
         b = normal[c].dropna()
         if len(a) < 3 or len(b) < 3:
             continue
-        print("  %-9s aberrantes med %9.0f   normales med %9.0f"
+        print("  %-9s aberrant med %9.0f   normal med %9.0f"
               % (c, a.median(), b.median()))
-    print("\nlecture : si les valeurs se repetent et que y moins un delta planifie est")
-    print("quasi constant, le defaut est deterministe et se recalcule. Sinon, ces lignes")
-    print("ne sont pas apprenables sur 2025 et il faut se contenter d'une esperance.")
+    print("\nreading: if the values repeat and y minus a scheduled delta is")
+    print("almost constant, the defect is deterministic and can be recomputed. Otherwise these rows")
+    print("cannot be learned from 2025 and an expectation is the best we can do.")
 
 
 def cmd_run(args):
@@ -1117,32 +1117,32 @@ def cmd_run(args):
 
     metar = load_metar(args.data) if args.with_metar else None
     if args.with_metar and metar is None:
-        print("attention : pas de METAR en cache, lance d'abord la sous-commande metar")
+        print("warning: no cached METAR, run the metar sub-command first")
 
-    print("lecture du training")
+    print("reading the training set")
     tr = load_training(args.data)
-    print("construction des features training (%d lignes contexte)" % len(tr))
+    print("building the training features (%d context rows)" % len(tr))
     tr = build(tr, metar)
     tr = tr[tr["PHASE_mvt"].eq("DEP") & tr["TAXITIME_SEC_mvt"].notna()].copy()
     tr["TAXITIME_SEC_mvt"] = tr["TAXITIME_SEC_mvt"].astype(float)
-    print("departs exploitables : %d" % len(tr))
+    print("usable departures: %d" % len(tr))
 
-    print("lecture du ranking")
+    print("reading the ranking file")
     rk = load_ranking(args.data)
-    print("construction des features ranking (%d lignes contexte)" % len(rk))
+    print("building the ranking features (%d context rows)" % len(rk))
     rk = build(rk, metar)
     rk = rk[rk["PHASE_mvt"].eq("DEP")].copy()
-    print("departs a predire : %d" % len(rk))
+    print("departures to predict: %d" % len(rk))
 
     if args.drop:
         dropped = [c for c in args.drop if c in tr.columns or c in rk.columns]
         tr = tr.drop(columns=[c for c in dropped if c in tr.columns])
         rk = rk.drop(columns=[c for c in dropped if c in rk.columns])
-        print("features retirees : %s" % ", ".join(dropped) if dropped else
-              "aucune des features demandees n'existe")
+        print("features removed: %s" % ", ".join(dropped) if dropped else
+              "none of the requested features exists")
 
-    # controle de derive : une feature dont l'echelle change entre 2025 et 2026
-    # fait perdre du score sans jamais apparaitre en validation
+    # drift check: a feature whose scale changes between 2025 and 2026
+    # costs score without ever showing up in validation
     num_cols = [c for c in rk.columns
                 if c in tr.columns and pd.api.types.is_numeric_dtype(tr[c])
                 and c not in ("TAXITIME_SEC_mvt", "t", "t_block", "MVT_ID_mvt",
@@ -1158,7 +1158,7 @@ def cmd_run(args):
         dna = abs(a.isna().mean() - b.isna().mean())
         drift.append((c, smd, dna))
     drift.sort(key=lambda z: -max(z[1], z[2] * 3))
-    print("\nderive 2025 vs 2026 (ecart de moyenne en ecarts-types, ecart de taux de vide) :")
+    print("\ndrift 2025 vs 2026 (mean shift in standard deviations, change in missing rate):")
     for c, smd, dna in drift[:12]:
         flag = "  <-- a verifier" if smd > 0.25 or dna > 0.05 else ""
         print("  %-24s smd %6.3f   delta_na %6.3f%s" % (c, smd, dna, flag))
@@ -1183,7 +1183,7 @@ def cmd_run(args):
             frame = apply_target_stats(frame, stats, keys, prefix, prior_mean)
         return frame
 
-    # phase 1 : validation. Encodage calcule hors janvier et juillet.
+    # phase 1: validation. Encoding computed outside January and July.
     src = tr.loc[fit_mask]
     tr_enc = encode(tr.copy(), src, prior)
     X, maps, feats = prepare_matrix(tr_enc)
@@ -1197,39 +1197,39 @@ def cmd_run(args):
         num_threads=args.threads,
     )
 
-    print("\nentrainement de validation")
+    print("\nvalidation training")
     dtrain = lgb.Dataset(X[fit_mask.to_numpy()], y[fit_mask.to_numpy()])
     dj = lgb.Dataset(X[val_jan.to_numpy()], y[val_jan.to_numpy()], reference=dtrain)
     djl = lgb.Dataset(X[val_jul.to_numpy()], y[val_jul.to_numpy()], reference=dtrain)
     evals = {}
     model = lgb.train(
         params, dtrain, num_boost_round=args.rounds,
-        valid_sets=[dj, djl], valid_names=["janvier", "juillet"],
+        valid_sets=[dj, djl], valid_names=["january", "july"],
         callbacks=[lgb.early_stopping(args.patience, verbose=False),
                    lgb.log_evaluation(100), lgb.record_evaluation(evals)],
     )
     best = model.best_iteration or args.rounds
-    rj = evals["janvier"]["rmse"][best - 1]
-    rl = evals["juillet"]["rmse"][best - 1]
-    print("\nRMSE janvier 2025 : %.2f s" % rj)
-    print("RMSE juillet 2025 : %.2f s" % rl)
-    print("moyenne quadratique des deux mois : %.2f s"
+    rj = evals["january"]["rmse"][best - 1]
+    rl = evals["july"]["rmse"][best - 1]
+    print("\nRMSE January 2025: %.2f s" % rj)
+    print("RMSE July 2025   : %.2f s" % rl)
+    print("quadratic mean of the two months: %.2f s"
           % np.sqrt((rj ** 2 + rl ** 2) / 2))
-    print("meilleure iteration : %d" % best)
+    print("best iteration: %d" % best)
 
     imp = pd.Series(model.feature_importance("gain"), index=feats).sort_values(ascending=False)
-    print("\n20 features les plus contributrices (gain) :")
+    print("\n20 most contributing features (gain):")
     for name, val in imp.head(20).items():
         print("  %-28s %12.0f" % (name, val))
 
-    # decomposition de l'erreur et choix de l'ecretage
+    # error breakdown and choice of the clipping
     val_mask = (val_jan | val_jul).to_numpy()
     pv = model.predict(X[val_mask], num_iteration=best)
     yv = y[val_mask]
     apv = tr_enc.loc[val_mask, "AIRPORT"].to_numpy()
-    print("\nRMSE par aeroport (validation) :")
+    print("\nRMSE per airport (validation):")
     print("  %-6s %9s %10s %10s %8s %9s"
-          % ("", "n", "RMSE", "RMSE propre", "n>seuil", "part MSE"))
+          % ("", "n", "RMSE", "clean RMSE", "n>thr", "MSE share"))
     clean = yv <= EXTREME_THR
     rows = []
     for a in sorted(pd.unique(apv)):
@@ -1244,87 +1244,87 @@ def cmd_run(args):
         print("  %-6s n=%7d  %9.1f s %9.1f s %7d %7.1f %%"
               % (a, n, r_all, r_cl, n_ext, share))
     sq_all = (pv - yv) ** 2
-    print("  ensemble : RMSE %.1f s, RMSE hors labels > %d s : %.1f s"
+    print("  overall: RMSE %.1f s, RMSE without labels > %d s: %.1f s"
           % (np.sqrt(sq_all.mean()), EXTREME_THR, np.sqrt(sq_all[clean].mean())))
 
-    # concentration de l'erreur sur la voie propre
+    # concentration of the error on the clean lane
     sq_c = np.sort(sq_all[clean])[::-1]
     tot = sq_c.sum()
-    print("\nconcentration de l'erreur sur la voie propre :")
+    print("\nconcentration of the error on the clean lane:")
     for frac in (0.0001, 0.001, 0.01, 0.1):
         k = max(int(len(sq_c) * frac), 1)
-        print("  les %6.2f %% pires lignes (%6d) portent %5.1f %% du MSE propre"
+        print("  the %6.2f %% worst rows (%6d) carry %5.1f %% of the clean MSE"
               % (100 * frac, k, 100 * sq_c[:k].sum() / tot))
     err = np.abs(pv[clean] - yv[clean])
-    print("  erreur absolue : mediane %5.0f s, p90 %5.0f s, p99 %6.0f s, max %7.0f s"
+    print("  absolute error: median %5.0f s, p90 %5.0f s, p99 %6.0f s, max %7.0f s"
           % (np.median(err), np.percentile(err, 90), np.percentile(err, 99), err.max()))
 
-    # decoupe par voie : avec ou sans heure d'off-block NM
+    # split by lane: with or without an NM off-block time
     lane_v = lane_mask(tr_enc.loc[val_mask]).to_numpy()
-    print("\ncontribution au MSE par voie (validation) :")
+    print("\nMSE contribution per lane (validation):")
     total_sq = float(np.sum((pv - yv) ** 2))
-    for name, m in [("avec off-block NM", ~lane_v), ("sans off-block NM", lane_v)]:
+    for name, m in [("with NM off-block", ~lane_v), ("without NM off-block", lane_v)]:
         if m.sum() == 0:
             continue
         sq = float(np.sum((pv[m] - yv[m]) ** 2))
-        print("  %-20s n=%7d (%5.2f %% des lignes)  RMSE %8.1f s  "
-              "part du MSE %5.1f %%"
+        print("  %-20s n=%7d (%5.2f %% of the rows)  RMSE %8.1f s  "
+              "MSE share %5.1f %%"
               % (name, int(m.sum()), 100 * m.mean() if m.size else 0,
                  np.sqrt(sq / m.sum()), 100 * sq / total_sq))
     n_ext = int((yv > EXTREME_THR).sum())
     st_v = match_state(tr_enc.loc[val_mask]).to_numpy()
-    print("  detail par etat d'appariement NM :")
-    for name in ["apparie avec AOBT", "apparie sans AOBT", "non apparie NM"]:
+    print("  breakdown by NM matching state:")
+    for name in ["matched with AOBT", "matched without AOBT", "not matched to NM"]:
         m = st_v == name
         if m.sum() == 0:
             continue
         sq = float(np.sum((pv[m] - yv[m]) ** 2))
-        print("    %-20s n=%7d (%5.2f %%)  RMSE %8.1f s  part du MSE %5.1f %%"
+        print("    %-20s n=%7d (%5.2f %%)  RMSE %8.1f s  MSE share %5.1f %%"
               % (name, int(m.sum()), 100 * m.mean(),
                  np.sqrt(sq / m.sum()), 100 * sq / total_sq))
-    print("  labels > %d s : %d lignes, %.1f %% du MSE total"
+    print("  labels > %d s: %d rows, %.1f %% of the total MSE"
           % (EXTREME_THR, n_ext,
              100 * float(np.sum((pv[yv > EXTREME_THR] - yv[yv > EXTREME_THR]) ** 2)) / total_sq
              if n_ext else 0.0))
 
-    # estimateur de melange sur la voie sans off-block NM
+    # mixture estimator on the lane without an NM off-block
     lane_fit = lane_mask(tr_enc.loc[fit_mask]).to_numpy()
     mix = fit_mixture(tr_enc.loc[fit_mask], y[fit_mask.to_numpy()], lane_fit)
     if mix:
         gp, ghi, glo, gn = mix["__global__"]
-        print("\nmelange estime sur la voie sans off-block NM (%d lignes d'apprentissage) :" % gn)
-        print("  proportion globale de labels par defaut : %.3f" % gp)
-        print("  moyenne composante par defaut : %.0f s, composante normale : %.0f s"
+        print("\nmixture estimated on the lane without NM off-block (%d training rows):" % gn)
+        print("  overall share of default labels: %.3f" % gp)
+        print("  mean of the default component: %.0f s, normal component: %.0f s"
               % (ghi if np.isfinite(ghi) else float("nan"),
                  glo if np.isfinite(glo) else float("nan")))
         for a in sorted(k for k in mix if k != "__global__"):
             p, m_hi, m_lo, n = mix[a]
             if n >= 20:
-                print("    %-6s n=%5d  p=%.3f  defaut %8.0f s  normal %6.0f s"
+                print("    %-6s n=%5d  p=%.3f  default %8.0f s  normal %6.0f s"
                       % (a, n, p, m_hi, m_lo))
         pv_mix, changed = apply_mixture(pv, tr_enc.loc[val_mask], lane_v, mix)
         r_mix = float(np.sqrt(np.mean((pv_mix - yv) ** 2)))
         r_raw = float(np.sqrt(np.mean((pv - yv) ** 2)))
-        print("  RMSE validation sans melange : %.2f s" % r_raw)
-        print("  RMSE validation avec melange : %.2f s  (%d lignes modifiees)"
+        print("  validation RMSE without mixture: %.2f s" % r_raw)
+        print("  validation RMSE with mixture   : %.2f s  (%d rows modified)"
               % (r_mix, changed))
         use_mixture = r_mix < r_raw
-        print("  -> melange %s" % ("retenu" if use_mixture else "ecarte"))
+        print("  -> mixture %s" % ("kept" if use_mixture else "discarded"))
     else:
         use_mixture = False
 
-    # regle des labels reconstruits : evaluee sur les predictions reelles du modele
-    print("\nregle y = MVT_TIME - SCHED_TIME appliquee aux predictions (validation) :")
+    # reconstructed-label rule: evaluated on the actual model predictions
+    print("\nrule y = MVT_TIME - SCHED_TIME applied to the predictions (validation):")
     ds_all = tr_enc["d_sched"].to_numpy(dtype=float)
     y_all = tr_enc["TAXITIME_SEC_mvt"].to_numpy(dtype=float)
-    # la signature est BLOCK_TIME proche de SCHED_TIME, a n'importe quelle
-    # amplitude : exiger y > 20000 s sous-estimait fortement la precision
+    # the signature is BLOCK_TIME close to SCHED_TIME, at any
+    # amplitude: requiring y > 20000 s strongly underestimated the precision
     is_def_all = np.abs(y_all - ds_all) < 120
     fit_np = fit_mask.to_numpy()
     rmse0 = float(np.sqrt(np.mean((pv - yv) ** 2)))
-    print("  RMSE de reference : %.2f s" % rmse0)
+    print("  reference RMSE: %.2f s" % rmse0)
     print("  %-18s %7s %6s %7s %10s %10s"
-          % ("variante", "seuil", "p", "cand.", "dur", "doux"))
+          % ("variant", "threshold", "p", "cand.", "hard", "soft"))
     best_rule = (rmse0, None)
     for vname, kw in RULE_VARIANTS:
         for thr in args.rule_grid:
@@ -1335,44 +1335,44 @@ def cmd_run(args):
             p = float((c_fit & is_def_all).sum()) / float(c_fit.sum())
             dsv = ds_all[val_mask]
             r = {}
-            for mode in ("dur", "doux"):
+            for mode in ("hard", "soft"):
                 pp = pv.copy()
-                repl = dsv[c_val] if mode == "dur" \
+                repl = dsv[c_val] if mode == "hard" \
                     else p * dsv[c_val] + (1 - p) * pp[c_val]
                 pp[c_val] = repl
                 r[mode] = float(np.sqrt(np.mean((pp - yv) ** 2)))
                 if r[mode] < best_rule[0]:
                     best_rule = (r[mode], (vname, kw, thr, p, mode))
             print("  %-18s %7d %6.3f %7d %10.2f %10.2f"
-                  % (vname, thr, p, int(c_val.sum()), r["dur"], r["doux"]))
+                  % (vname, thr, p, int(c_val.sum()), r["hard"], r["soft"]))
     if best_rule[1] is None:
-        print("  aucune combinaison n'ameliore le RMSE, regle non appliquee")
+        print("  no combination improves the RMSE, rule not applied")
         rule_cfg = None
     else:
         vname, kw, thr, p, mode = best_rule[1]
-        print("  retenu : %s, seuil %d, mode %s -> %.2f s (gain %.2f s)"
+        print("  kept: %s, threshold %d, mode %s -> %.2f s (gain %.2f s)"
               % (vname, thr, mode, best_rule[0], rmse0 - best_rule[0]))
         rule_cfg = (kw, thr, mode)
 
-    print("\nbalayage de l'ecretage haut (validation) :")
+    print("\nsweep of the upper clipping (validation):")
     base_rmse = float(np.sqrt(np.mean((pv - yv) ** 2)))
-    print("  sans ecretage           RMSE %.2f s" % base_rmse)
+    print("  no clipping             RMSE %.2f s" % base_rmse)
     best_hi, best_rmse = None, base_rmse
     for hi in [1800, 2400, 3000, 3600, 4200, 4800, 6000, 7200]:
         r = float(np.sqrt(np.mean((np.clip(pv, 0, hi) - yv) ** 2)))
         flag = ""
         if r < best_rmse:
             best_rmse, best_hi, flag = r, hi, "  <-- meilleur"
-        print("  ecretage a %5d s      RMSE %.2f s%s" % (hi, r, flag))
+        print("  clipping at %5d s      RMSE %.2f s%s" % (hi, r, flag))
     if best_hi is None:
-        print("  aucun ecretage ne fait mieux, les predictions extremes sont justifiees")
+        print("  no clipping does better, the extreme predictions are justified")
     else:
-        print("  gain de %.2f s en ecretant a %d s" % (base_rmse - best_rmse, best_hi))
+        print("  gain of %.2f s by clipping at %d s" % (base_rmse - best_rmse, best_hi))
 
     clip_hi = args.clip_hi if args.clip_hi > 0 else (best_hi or 0)
 
-    # phase 2 : reentrainement sur tout 2025, encodage recalcule sur tout 2025
-    print("\nreentrainement sur l'annee complete")
+    # phase 2: retraining on all of 2025, encoding recomputed on all of 2025
+    print("\nretraining on the full year")
     prior_full = tr["TAXITIME_SEC_mvt"].mean()
     tr_full = encode(tr.copy(), tr, prior_full)
     Xf, maps_full, feats_full = prepare_matrix(tr_full)
@@ -1390,13 +1390,13 @@ def cmd_run(args):
     if clip_hi > 0:
         n_clipped = int((pred > clip_hi).sum())
         pred = np.clip(pred, 0, clip_hi)
-        print("ecretage applique a %d s (%d predictions concernees)" % (clip_hi, n_clipped))
+        print("clipping applied at %d s (%d predictions affected)" % (clip_hi, n_clipped))
     if use_mixture:
         mix_full = fit_mixture(tr_full, yf, lane_mask(tr_full).to_numpy())
         lane_r = lane_mask(rk_enc).to_numpy()
         pred, changed = apply_mixture(pred, rk_enc, lane_r, mix_full)
-        print("melange applique sur %d lignes sans off-block NM" % changed)
-    print("predictions : moyenne %.0f s, mediane %.0f s, min %.0f, max %.0f"
+        print("mixture applied to %d rows without NM off-block" % changed)
+    print("predictions: mean %.0f s, median %.0f s, min %.0f, max %.0f"
           % (pred.mean(), np.median(pred), pred.min(), pred.max()))
 
     if rule_cfg is not None:
@@ -1411,9 +1411,9 @@ def cmd_run(args):
         ds_r = rk_enc["d_sched"].to_numpy(dtype=float)
         ok = c_r & np.isfinite(ds_r)
         if ok.sum():
-            pred[ok] = (ds_r[ok] if mode == "dur"
+            pred[ok] = (ds_r[ok] if mode == "hard"
                         else p_full * ds_r[ok] + (1 - p_full) * pred[ok])
-            print("regle appliquee (%s, seuil %d, p=%.3f) sur %d lignes"
+            print("rule applied (%s, threshold %d, p=%.3f) to %d rows"
                   % (mode, thr, p_full, int(ok.sum())))
     sub_path = os.path.join(args.data, "submitting.parquet")
     sub = pd.read_parquet(sub_path)
@@ -1422,11 +1422,11 @@ def cmd_run(args):
     sub["TAXITIME_SEC_mvt"] = sub["MVT_ID_mvt"].map(mapping).astype(float)
     missing = int(sub["TAXITIME_SEC_mvt"].isna().sum())
     if missing:
-        print("attention : %d identifiants sans prediction, remplis par la moyenne" % missing)
+        print("warning: %d identifiers without prediction, filled with the mean" % missing)
         sub["TAXITIME_SEC_mvt"] = sub["TAXITIME_SEC_mvt"].fillna(float(np.mean(pred)))
     sub.to_parquet(args.out, index=False)
-    print("\nsoumission ecrite : %s (%d lignes)" % (args.out, len(sub)))
-    print("nom attendu dans le bucket : motivated-ostrich_v<N>.parquet")
+    print("\nsubmission written: %s (%d rows)" % (args.out, len(sub)))
+    print("expected name in the bucket: motivated-ostrich_v<N>.parquet")
 
 
 # ----------------------------------------------------------------------------- main
@@ -1435,42 +1435,42 @@ def main():
     p = argparse.ArgumentParser(description="PRC Data Challenge 2026 - taxi-out")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("diagnose", help="diagnostics fuite et baselines")
+    d = sub.add_parser("diagnose", help="leakage diagnostics and baselines")
     d.add_argument("--data", default="./data")
     d.set_defaults(func=cmd_diagnose)
 
-    m = sub.add_parser("metar", help="telecharge les METAR")
+    m = sub.add_parser("metar", help="downloads the METARs")
     m.add_argument("--data", default="./data")
     m.add_argument("--force", action="store_true")
     m.set_defaults(func=cmd_metar)
 
-    o = sub.add_parser("outliers", help="analyse un aeroport a forte erreur")
+    o = sub.add_parser("outliers", help="analyzes an airport with a high error")
     o.add_argument("--data", default="./data")
     o.add_argument("--airport", default="LIRF")
     o.set_defaults(func=cmd_outliers)
 
-    f = sub.add_parser("defaults", help="inspecte les labels aberrants")
+    f = sub.add_parser("defaults", help="inspects the aberrant labels")
     f.add_argument("--data", default="./data")
     f.add_argument("--thr", type=float, default=20000)
     f.add_argument("--rows", type=int, default=40)
     f.set_defaults(func=cmd_defaults)
 
-    w = sub.add_parser("dayshift", help="famille des labels decales d'un jour")
+    w = sub.add_parser("dayshift", help="family of labels shifted by one day")
     w.add_argument("--data", default="./data")
     w.add_argument("--thr", type=float, default=20000)
     w.set_defaults(func=cmd_dayshift)
 
-    u = sub.add_parser("rule", help="precision et rappel de la regle y = decollage - horaire")
+    u = sub.add_parser("rule", help="precision and recall of the rule y = takeoff - schedule")
     u.add_argument("--data", default="./data")
     u.add_argument("--tol", type=float, default=120)
     u.add_argument("--thr-extreme", type=float, default=20000)
     u.add_argument("--grid", type=float, nargs="+",
                    default=[3600, 7200, 10800, 14400, 20000, 30000, 40000])
     u.add_argument("--sep-thr", type=float, default=10800,
-                   help="seuil utilise pour comparer vrais et faux candidats")
+                   help="threshold used to compare true and false candidates")
     u.set_defaults(func=cmd_rule)
 
-    r = sub.add_parser("run", help="features, entrainement, soumission")
+    r = sub.add_parser("run", help="features, training, submission")
     r.add_argument("--data", default="./data")
     r.add_argument("--out", default="submission.parquet")
     r.add_argument("--with-metar", action="store_true")
@@ -1481,11 +1481,11 @@ def main():
     r.add_argument("--min-leaf", type=int, default=100)
     r.add_argument("--threads", type=int, default=0)
     r.add_argument("--drop", nargs="*", default=[],
-                   help="features a retirer avant l'entrainement")
+                   help="features to remove before training")
     r.add_argument("--rule-grid", type=float, nargs="+",
                    default=[1800, 2700, 3600, 5400, 7200, 10800, 14400, 20000, 30000])
     r.add_argument("--clip-hi", type=float, default=0,
-                   help="ecretage haut en secondes ; 0 = choisi automatiquement sur la validation")
+                   help="upper clipping in seconds; 0 = chosen automatically on the validation set")
     r.set_defaults(func=cmd_run)
 
     args = p.parse_args()

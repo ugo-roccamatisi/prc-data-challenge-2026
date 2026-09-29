@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""PRC : expériences reproductibles, sélection interne puis contrôle figé.
-Voir README.md. Aucun téléversement de soumission n'est effectué.
+"""PRC: reproducible experiments, internal selection then a frozen control.
+See README.md. No submission is ever uploaded.
 """
 from __future__ import annotations
 import argparse
@@ -56,13 +56,13 @@ def code_hash():
 def score(y, p):
     y, p = np.asarray(y, dtype=float), np.asarray(p, dtype=float)
     if len(y) == 0 or y.shape != p.shape or not (np.isfinite(y).all() and np.isfinite(p).all()):
-        raise ValueError('RMSE : tableaux vides, non finis ou de tailles incompatibles.')
+        raise ValueError('RMSE: empty, non-finite or mismatched arrays.')
     return float(np.sqrt(np.mean((y - p) ** 2)))
 
 
 def check_ids(df, name):
     if ID not in df or df[ID].isna().any() or df[ID].duplicated().any():
-        raise ValueError(f'{name} : identifiants absents, manquants ou dupliqués.')
+        raise ValueError(f'{name}: identifiers absent, missing or duplicated.')
 
 
 def feature_names(df):
@@ -71,7 +71,7 @@ def feature_names(df):
 
 
 def add_clocks(d):
-    """Heures, changements de date, désaccords entre sources observables."""
+    """Clock times, date changes, disagreements between observable sources."""
     d = d.copy()
     mvt = d['MVT_TIME_UTC_mvt']
     for col in CLOCK_COLS:
@@ -95,13 +95,13 @@ def add_clocks(d):
 
 
 def build(raw):
-    """Les labels DEP sont retirés AVANT toutes les features contextuelles."""
+    """DEP labels are removed BEFORE any contextual feature is built."""
     raw = raw.copy().reset_index(drop=True)
     required = [ID, 'PHASE_mvt', 'MVT_TIME_UTC_mvt', 'ADEP_mvt', 'ADES_mvt',
                 'RUNWAY_mvt', 'STAND_mvt', 'AIRCRAFT_TYPE_mvt', 'SCHED_TIME_UTC_mvt']
     missing = [c for c in required if c not in raw]
     if missing:
-        raise ValueError(f'Colonnes obligatoires manquantes : {missing}')
+        raise ValueError(f'Missing required columns: {missing}')
     for c in v.TIME_COLS:
         if c not in raw:
             raw[c] = pd.NaT
@@ -111,7 +111,7 @@ def build(raw):
     is_dep = raw['PHASE_mvt'].eq('DEP')
     labels = raw.loc[is_dep, [ID, TARGET, 'BLOCK_TIME_UTC_mvt', 'SCHED_TIME_UTC_mvt',
                              'MVT_TIME_UTC_mvt']].copy()
-    check_ids(labels, 'Départs')
+    check_ids(labels, 'Departures')
     gap = (labels['BLOCK_TIME_UTC_mvt'] - labels['SCHED_TIME_UTC_mvt']).dt.total_seconds()
     labels[CORRUPT] = np.where(gap.notna(), (gap.abs() <= v.CORRUPT_TOL_S).astype(float), np.nan)
     labels['observed_block'] = labels['BLOCK_TIME_UTC_mvt']
@@ -123,7 +123,7 @@ def build(raw):
     d = d.drop(columns=[TARGET, CORRUPT], errors='ignore').merge(
         labels[[ID, TARGET, CORRUPT, 'observed_block', 'target_identity_error']],
         on=ID, how='left', validate='one_to_one')
-    # Les colonnes de diagnostic ci-dessus ne figurent jamais dans feature_names.
+    # The diagnostic columns above never appear in feature_names.
     return d
 
 
@@ -135,7 +135,7 @@ def input_signature(files):
 def prepare(args):
     files = sorted(args.data.glob('training_*.parquet'))
     if not files:
-        raise FileNotFoundError(f'Aucun training_*.parquet dans {args.data}')
+        raise FileNotFoundError(f'No training_*.parquet in {args.data}')
     args.cache.mkdir(parents=True, exist_ok=True)
     meta = {'inputs': input_signature(files), 'code': code_hash()}
     path = args.cache / 'features.parquet'
@@ -143,20 +143,20 @@ def prepare(args):
     if path.exists() and mp.exists() and not args.rebuild:
         old = json.loads(mp.read_text(encoding='utf-8'))
         if old['source'] == meta and old['feature_sha256'] == sha(path):
-            log('Cache vérifié, déjà prêt.'); return
-        raise RuntimeError('Cache différent : relancer prepare avec --rebuild.')
-    log('Lecture et reconstruction des features, sans utiliser le cache v15.')
+            log('Cache checked, already ready.'); return
+        raise RuntimeError('Cache differs: rerun prepare with --rebuild.')
+    log('Reading and rebuilding the features, without using the v15 cache.')
     raw = pd.concat([pd.read_parquet(p) for p in files], ignore_index=True)
     d = build(raw)
     finite = np.isfinite(pd.to_numeric(d[TARGET], errors='coerce'))
     excluded = int((~finite).sum())
     d = d.loc[finite].copy()
     if d.empty or d['month'].isna().any():
-        raise ValueError('Pas de cible exploitable ou date de mouvement manquante.')
+        raise ValueError('No usable target or missing movement date.')
     years = sorted(d['MVT_TIME_UTC_mvt'].dt.year.unique().tolist())
     if years != [2025]:
-        raise ValueError(f'Ce protocole attend 2025 uniquement, reçu {years}. Adapter explicitement les splits.')
-    # Aucune cible finie n'est écrêtée ou éliminée, même si <30 s ou négative.
+        raise ValueError(f'This protocol expects 2025 only, got {years}. Adapt the splits explicitly.')
+    # No finite target is clipped or dropped, even if <30 s or negative.
     d.to_parquet(path, index=False)
     diagnostics = {'rows': len(d), 'nonfinite_targets_excluded': excluded,
                    'negative_targets_kept': int((d[TARGET] < 0).sum()),
@@ -174,7 +174,7 @@ def prepare(args):
 def fit_maps(d):
     known = d[CORRUPT].notna()
     if not known.any():
-        raise ValueError('Aucun label de corruption connu dans le train.')
+        raise ValueError('No known corruption label in the training set.')
     te, prior = v.fit_te_maps(d.loc[known], d.loc[known, CORRUPT].to_numpy())
     um = v.fit_unimpeded_maps(d)
     clean = d.loc[d[CORRUPT].eq(0), TARGET]
@@ -188,15 +188,15 @@ def apply_maps(d, maps):
 
 
 def encoded_training(d):
-    # Les labels de chaque mois sont tous exclus de ses propres encodages.
-    # Les groupes sont les mêmes à chaque entraînement; aucune lecture de la validation.
+    # The labels of each month are all excluded from its own encodings.
+    # The groups are the same for every training run; the validation set is never read.
     groups = {1: 0, 7: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 8: 3, 9: 4, 10: 4, 11: 5, 12: 5}
     fold = d['month'].map(groups)
     pieces = []
     for f in sorted(fold.unique()):
         inside = fold.eq(f)
         if (~inside).sum() == 0:
-            raise ValueError('Encodage : il faut plusieurs groupes de mois.')
+            raise ValueError('Encoding: several month groups are required.')
         pieces.append(apply_maps(d.loc[inside], fit_maps(d.loc[~inside])))
     return pd.concat(pieces).loc[d.index]
 
@@ -204,7 +204,7 @@ def encoded_training(d):
 def matrices(tr, va):
     cols = feature_names(tr)
     if set(cols) - set(va.columns):
-        raise ValueError('Features manquantes à la prédiction.')
+        raise ValueError('Missing features at prediction time.')
     a, b = tr[cols].copy(), va[cols].copy()
     for c in cols:
         if c in v.CAT_FEATURES:
@@ -219,7 +219,7 @@ def matrices(tr, va):
 
 
 def baseline(d, median):
-    # La référence AOBT n'est utilisée comme offset que si elle est physiquement plausible.
+    # The AOBT reference is only used as an offset when it is physically plausible.
     a = d['delta_mvt_aobt3_s'].to_numpy(float)
     u = d['unimpeded_p50'].fillna(median).to_numpy(float)
     return np.where(np.isfinite(a) & (a >= 0) & (a <= 7200), a, u)
@@ -253,16 +253,16 @@ def learn(kind, X, y, V, ytrue, transform, seed, args, folder, rounds=None):
     if path.exists() and info.exists():
         m = lgb.Booster(model_file=str(path))
         n = json.loads(info.read_text())['rounds']
-        log(f'Reprise {kind} seed {seed}, {n} arbres')
+        log(f'Resuming {kind} seed {seed}, {n} trees')
     else:
         if len(X) == 0 or not np.isfinite(y).all():
-            raise ValueError(f'{kind} : train vide ou labels non finis.')
+            raise ValueError(f'{kind}: empty training set or non-finite labels.')
         p = model_params(kind, seed, args)
         ds = lgb.Dataset(X, label=y)
         if rounds is None:
             if len(V) == 0:
-                raise ValueError(f'{kind} : validation vide.')
-            # Labels du Dataset cohérents avec son objective; feval utilise la vraie durée.
+                raise ValueError(f'{kind}: empty validation set.')
+            # Dataset labels consistent with its objective; feval uses the true duration.
             validation_label = np.zeros(len(V))
             dv = lgb.Dataset(V, label=validation_label, reference=ds)
             def feval(pred, data):
@@ -279,15 +279,15 @@ def learn(kind, X, y, V, ytrue, transform, seed, args, folder, rounds=None):
         m.save_model(str(tmp), num_iteration=n)
         tmp.replace(path)
         dump(info, {'rounds': n})
-        log(f'{kind} seed {seed} terminé, {n} arbres')
+        log(f'{kind} seed {seed} done, {n} trees')
     return m, n
 
 
 def fit_predict(tr, va, args, folder, frozen=None):
-    """Aucun label de va n'est consulté quand frozen est fourni (contrôle/ranking)."""
+    """No label of va is read when frozen is provided (control/ranking)."""
     folder.mkdir(parents=True, exist_ok=True)
     maps = fit_maps(tr)
-    log(f'Encodages par blocs de mois : {len(tr):,} train, {len(va):,} prédictions')
+    log(f'Encodings by month blocks: {len(tr):,} train, {len(va):,} predictions')
     t = encoded_training(tr)
     d = apply_maps(va, maps)
     X, V = matrices(t, d)
@@ -299,7 +299,7 @@ def fit_predict(tr, va, args, folder, frozen=None):
     uv = d.unimpeded_p50.fillna(med).to_numpy(float)
     bt, bv = baseline(t, med), baseline(d, med)
     y = t[TARGET].to_numpy(float)
-    # Seule la sélection peut accéder aux labels de va.
+    # Only the selection step may access the labels of va.
     vy = d[TARGET].to_numpy(float) if frozen is None else np.zeros(len(d))
     vc = d[CORRUPT].eq(0).to_numpy() if frozen is None else np.ones(len(d), bool)
     normals = []; direct = {'direct_l2': [], 'direct_huber': []}
@@ -311,9 +311,9 @@ def fit_predict(tr, va, args, folder, frozen=None):
             mask = clean & has if kind == 'normal_a' else clean
             vm = vc & vhas if kind == 'normal_a' else vc & ~vhas
             if frozen is None and not vm.any():
-                vm = vc  # B peut être sélectionné sur toutes les lignes saines si aucun AOBT absent.
+                vm = vc  # B can be selected on all clean rows if no AOBT is missing.
                 if kind == 'normal_a':
-                    raise ValueError('Aucune ligne saine avec AOBT dans la sélection.')
+                    raise ValueError('No clean row with AOBT in the selection set.')
             offset = t.delta_mvt_aobt3_s.to_numpy(float) if kind == 'normal_a' else ub
             voffset = d.delta_mvt_aobt3_s.to_numpy(float) if kind == 'normal_a' else uv
             transform = lambda p, off=voffset[vm]: np.clip(off + p, 30, 7200)
@@ -327,13 +327,13 @@ def fit_predict(tr, va, args, folder, frozen=None):
             importance.extend({'component': kind, 'seed': seed, 'feature': f, 'gain': float(g)}
                               for f, g in zip(X.columns, m.feature_importance('gain')))
         normals.append(np.clip(normal, 30, 7200))
-    # Le classifieur est sélectionné sur le mélange avec le régime normal fixé ci-dessus.
+    # The classifier is selected on the mixture, with the normal regime fixed above.
     normal = np.mean(normals, axis=0)
     ps = []
     for si, seed in enumerate(args.seeds):
         known = t[CORRUPT].notna().to_numpy()
         if t.loc[known, CORRUPT].nunique() < 2:
-            raise ValueError('Classifieur : une seule classe dans le train.')
+            raise ValueError('Classifier: a single class in the training set.')
         transform = lambda p: mixture(p, normal, d.delta_mvt_sched_s.to_numpy(float), .75)
         m, n = learn('classifier', X.loc[known], t.loc[known, CORRUPT].to_numpy(float),
                      V, vy, transform, seed, args, folder,
@@ -343,7 +343,7 @@ def fit_predict(tr, va, args, folder, frozen=None):
         importance.extend({'component': 'classifier', 'seed': seed, 'feature': f, 'gain': float(g)}
                           for f, g in zip(X.columns, m.feature_importance('gain')))
         for kind in direct:
-            # Pas de clipping des labels; Huber est une ablation de robustesse.
+            # No label clipping; Huber is a robustness ablation.
             m, n = learn(kind, X, y-bt, V, vy, lambda p: np.maximum(bv+p, 0),
                          seed, args, folder, frozen[kind][si] if frozen is not None else None)
             rounds_out[kind].append(n)
@@ -361,14 +361,14 @@ def fit_predict(tr, va, args, folder, frozen=None):
         out[k] = np.maximum(np.mean(preds, axis=0), 0)
     for c in [BASE, 'mix1'] + list(direct):
         if not np.isfinite(out[c]).all():
-            raise ValueError(f'Prédictions non finies : {c}')
+            raise ValueError(f'Non-finite predictions: {c}')
     pd.DataFrame(importance).to_csv(folder / 'importance.csv', index=False)
     dump(folder / 'rounds.json', rounds_out)
     return out, rounds_out
 
 
 def select_model(pred):
-    """Petit budget de sélection : 13 configurations prédéfinies, sans stacking."""
+    """Small selection budget: 13 predefined configurations, no stacking."""
     y = pred[TARGET].to_numpy(float)
     base = pred[BASE].to_numpy(float)
     months = sorted(pred.month.unique())
@@ -429,9 +429,9 @@ def diagnostics(pred, folder, name):
 def load_features(cache):
     manifest = json.loads((cache / 'manifest.json').read_text(encoding='utf-8'))
     if manifest['source']['code'] != code_hash():
-        raise RuntimeError('Code modifié depuis prepare : reconstruire le cache.')
+        raise RuntimeError('Code changed since prepare: rebuild the cache.')
     if manifest['feature_sha256'] != sha(cache / 'features.parquet'):
-        raise RuntimeError('Cache modifié : reconstruire avec prepare --rebuild.')
+        raise RuntimeError('Cache changed: rebuild with prepare --rebuild.')
     d = pd.read_parquet(cache / 'features.parquet')
     check_ids(d, 'Cache')
     return d, manifest
@@ -452,16 +452,16 @@ def run(args):
     mp = args.out / 'run_config.json'
     if mp.exists():
         if json.loads(mp.read_text(encoding='utf-8')) != cfg:
-            raise RuntimeError('Ce dossier contient une autre expérience. Choisir un autre --out.')
+            raise RuntimeError('This folder contains another experiment. Choose another --out.')
     else:
         if any(args.out.iterdir()):
-            raise RuntimeError('Le dossier --out doit être vide pour une nouvelle expérience.')
+            raise RuntimeError('The --out folder must be empty for a new experiment.')
         dump(mp, cfg)
     tuning = d[~d.month.isin(SELECT+CONTROL)].copy()
     validation = d[d.month.isin(SELECT)].copy()
     control = d[d.month.isin(CONTROL)].copy()
     if set(validation.month.unique()) != set(SELECT) or set(control.month.unique()) != set(CONTROL):
-        raise ValueError('Mois de sélection ou contrôle absents.')
+        raise ValueError('Selection or control months missing.')
     locked = args.out / 'locked_selection.json'
     if not locked.exists():
         pred, rounds = fit_predict(tuning, validation, args, args.out / 'selection_models')
@@ -470,13 +470,13 @@ def run(args):
         pred['selected'] = apply_choice(pred, choice)
         diagnostics(pred, args.out, 'selection')
         dump(locked, {'choice': choice, 'rounds': rounds, 'config': cfg})
-        log(f'Configuration figée AVANT le contrôle : {choice}')
+        log(f'Configuration frozen BEFORE the control: {choice}')
     frozen = json.loads(locked.read_text(encoding='utf-8'))
     if frozen['config'] != cfg:
-        raise RuntimeError('Configuration figée incompatible.')
+        raise RuntimeError('Incompatible frozen configuration.')
     if not (args.out / 'summary.json').exists():
         train_control = d[~d.month.isin(CONTROL)].copy()
-        # On masque aussi les labels dans l'objet passé à la prédiction du contrôle.
+        # The labels are also masked in the object passed to the control prediction.
         hidden = control.copy()
         hidden[[TARGET, CORRUPT]] = np.nan
         pred, _ = fit_predict(train_control, hidden, args, args.out / 'control_models', frozen['rounds'])
@@ -489,21 +489,21 @@ def run(args):
                   'control_rmse_selected': score(pred[TARGET], pred.selected),
                   'control_gain_by_month': {str(m): score(pred.loc[pred.month.eq(m), TARGET], pred.loc[pred.month.eq(m), BASE])-
                      score(pred.loc[pred.month.eq(m), TARGET], pred.loc[pred.month.eq(m), 'selected']) for m in CONTROL},
-                  'note': 'Contrôle non utilisé pour la sélection de ce script; mois déjà explorés historiquement.'}
+                  'note': 'Control not used for selection in this script; these months were explored earlier in the project.'}
         dump(args.out / 'summary.json', result)
     log((args.out / 'summary.json').read_text(encoding='utf-8'))
-    log('Terminé. La configuration reste figée, même si le contrôle se dégrade.')
+    log('Done. The configuration stays frozen, even if the control degrades.')
 
 
 def submission_frame(template, pred, values):
-    check_ids(template, 'Template de soumission')
-    check_ids(pred, 'Prédictions ranking')
+    check_ids(template, 'Submission template')
+    check_ids(pred, 'Ranking predictions')
     if not np.isfinite(values).all():
-        raise ValueError('Soumission : prédictions non finies.')
+        raise ValueError('Submission: non-finite predictions.')
     pp = pred[[ID]].copy(); pp[TARGET] = values
     s = template[[ID]].merge(pp, on=ID, how='left', validate='one_to_one', sort=False)
     if len(s) != len(template) or s[TARGET].isna().any() or not s[ID].equals(template[ID].reset_index(drop=True)):
-        raise ValueError('Soumission : couverture ou ordre des identifiants incorrect.')
+        raise ValueError('Submission: wrong coverage or order of the identifiers.')
     return s
 
 
@@ -514,21 +514,21 @@ def submit(args):
     for k in ['seeds', 'max_rounds', 'patience', 'threads']:
         setattr(args, k, cfg[k])
     if settings(args, manifest) != cfg:
-        raise RuntimeError('Code, données ou environnement différents de la sélection.')
+        raise RuntimeError('Code, data or environment differ from the selection.')
     if not (args.out / 'summary.json').exists():
-        raise RuntimeError('Lancer run et terminer le contrôle avant submit.')
+        raise RuntimeError('Run `run` and complete the control before submit.')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', args.team):
-        raise ValueError('Nom d’équipe invalide.')
+        raise ValueError('Invalid team name.')
     dest = args.out / 'submissions'
     dest.mkdir(exist_ok=True)
     paths = [dest / f'{args.team}_v{args.start_version+i}.parquet' for i in range(2)]
     if any(p.exists() for p in paths):
-        raise FileExistsError('Numéros de soumission déjà présents : choisir --start-version différent.')
+        raise FileExistsError('Submission numbers already exist: choose a different --start-version.')
     raw = pd.read_parquet(args.data / 'ranking.parquet')
     rp = args.out / 'ranking_input.json'
     signature = input_signature([args.data / 'ranking.parquet', args.data / 'submitting.parquet'])
     if rp.exists() and json.loads(rp.read_text()) != signature:
-        raise RuntimeError('Ranking modifié : utiliser un nouveau dossier expérience.')
+        raise RuntimeError('Ranking file changed: use a new experiment folder.')
     dump(rp, signature)
     rank = build(raw)
     rank[[TARGET, CORRUPT]] = np.nan
@@ -538,7 +538,7 @@ def submit(args):
     outputs = [submission_frame(template, pred, pred[c].to_numpy()) for c in [BASE, 'selected']]
     for p, frame in zip(paths, outputs):
         frame.to_parquet(p, index=False)
-        log(f'Soumission écrite : {p} ({len(frame):,} lignes)')
+        log(f'Submission written: {p} ({len(frame):,} rows)')
     pred.drop(columns=[TARGET, CORRUPT]).to_parquet(args.out / 'ranking_predictions.parquet', index=False)
     dump(args.out / 'submission_manifest.json', {'reference': str(paths[0]), 'selected': str(paths[1]),
                                                'choice': locked['choice'], 'automatic_upload': False})
@@ -571,5 +571,5 @@ if __name__ == '__main__':
     a = parser().parse_args()
     if a.command == 'run' and (a.threads < 1 or a.max_rounds < 1 or a.patience < 1
                               or len(set(a.seeds)) != len(a.seeds)):
-        raise SystemExit('Paramètres invalides : threads/rounds/patience positifs, seeds uniques.')
+        raise SystemExit('Invalid parameters: threads/rounds/patience must be positive, seeds unique.')
     {'prepare': prepare, 'run': run, 'submit': submit}[a.command](a)

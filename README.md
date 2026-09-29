@@ -136,7 +136,7 @@ python src/taxiout_v19.py --following --rounds-scale 2 --clf-lean \
     --per-airport --clf-global --catboost --cat-weight 0.75 --seeds 3
 python src/apply_rule.py --ranking data/ranking.parquet \
     --sub submissions/motivated-ostrich_v19.parquet \
-    --out submissions/motivated-ostrich_v26.parquet --mode dur
+    --out submissions/motivated-ostrich_v26.parquet --mode hard
 ```
 
 Useful options: `--fast` trains the first stage once instead of seven times

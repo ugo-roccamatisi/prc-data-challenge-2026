@@ -1,30 +1,30 @@
 """
-PRC Data Challenge 2026 - Taxi-out v19 : script unique
+PRC Data Challenge 2026 - Taxi-out v19: single script
 ======================================================
 
-Fusion autonome de taxiout_v16.py (features, encodages, premier etage) et
-de taxiout_v17.py (correcteur de residu hors-fold), plus les features de
-file de demande ajoutees en v19. Un seul fichier, aucune dependance a
-taxiout_v16.py ni a taxiout_v17.py.
+Self-contained merge of taxiout_v16.py (features, encodings, first stage) and
+of taxiout_v17.py (out-of-fold residual corrector), plus the demand-queue
+features added in v19. A single file, with no dependency on
+taxiout_v16.py or taxiout_v17.py.
 
-Nouveautes v19 par rapport a v17 :
-  q_sched_apt, q_sched_rwy   file de demande comptee sur l'heure programmee
-  q_eobt_apt,  q_eobt_rwy    et sur l'EOBT, donc disponible aussi sur les
-                             lignes non appariees a NM, contrairement aux
-                             files v15 qui exigent l'AOBT du vol lui-meme
-  rwy_burst_pos              decollages consecutifs espaces de moins de 2 min
-  rwy_gap_mean5_s            moyenne des cinq derniers intervalles sur la piste
-  wake_pair                  couple de sillage avec le decollage precedent
+New in v19 compared with v17:
+  q_sched_apt, q_sched_rwy   demand queue counted on the scheduled time
+  q_eobt_apt,  q_eobt_rwy    and on the EOBT, hence also available for
+                             rows not matched to NM, unlike the
+                             v15 queues that require the flight's own AOBT
+  rwy_burst_pos              consecutive takeoffs less than 2 min apart
+  rwy_gap_mean5_s            mean of the last five intervals on the runway
+  wake_pair                  wake pair with the previous takeoff
 
-Options :
-  python taxiout_v19.py                lance la chaine complete
-  python taxiout_v19.py --no-month     retire "month" des features (proxy de
-                                       saison, suspecte de degrader juillet)
-  python taxiout_v19.py --no-demand    desactive les features v19, pour mesurer
-                                       leur apport a configuration egale
+Options (see --help for the full list):
+  python taxiout_v19.py                runs the full chain
+  python taxiout_v19.py --no-month     removes "month" from the features (season
+                                       proxy, suspected of degrading July)
+  python taxiout_v19.py --demand       enables the v19 demand features, to measure
+                                       their contribution at equal configuration
 
-Le cache de features porte un nom distinct par configuration, il n'y a donc
-rien a supprimer entre deux essais.
+The feature cache has a distinct name for each configuration, so there is
+nothing to delete between two runs.
 """
 
 import argparse
@@ -47,8 +47,8 @@ DATA_DIR = SCRIPT_DIR / "data"
 OUT_DIR = SCRIPT_DIR / "submissions"
 OUT_DIR.mkdir(exist_ok=True)
 
-# Le cache v4 convient (memes colonnes de base) ; le target encoding est
-# recalcule a chaque run car il depend du split.
+# The v4 cache is suitable (same base columns); the target encoding is
+# recomputed at each run because it depends on the split.
 CACHE_PATH = DATA_DIR / "dep_features_cache_v15.parquet"
 USE_CACHE = True
 
@@ -56,44 +56,44 @@ TAXI_MIN_S = 30
 TAXI_MAX_S = 2 * 3600
 CORRUPT_TOL_S = 10
 
-# Seuil de separation corps / queue (secondes). 3600 s : au dela, un taxi
-# n'est plus un roulage ordinaire. 0.35 % des departs a CDG, mais 63 % de
-# la variance de cet aeroport.
+# Body / tail split threshold (seconds). 3600 s: beyond that, a taxi
+# is no longer an ordinary taxi. 0.35 % of departures at CDG, but 63 % of
+# the variance of that airport.
 TAIL_THR = 3600
 
 CONGESTION_WINDOW_MIN = 15
 VAL_MONTHS = [1, 7]
 
-# Contexte arrivees
-ARR_WINDOW_MIN = 30        # fenetre +/- autour du decollage
-ARR_TAXI_CLIP_S = 3600     # ecretage du taxi-in avant moyenne
-ARR_LONG_S = 1200          # seuil "taxi-in long"
+# Arrival context
+ARR_WINDOW_MIN = 30        # +/- window around the takeoff
+ARR_TAXI_CLIP_S = 3600     # taxi-in clipping before averaging
+ARR_LONG_S = 1200          # "long taxi-in" threshold
 
-# Enchainement par poste
-STAND_LINK_MAX_H = 36      # au dela, pas d'appariement arrivee -> depart
+# Stand chaining
+STAND_LINK_MAX_H = 36      # beyond this, no arrival -> departure matching
 
-# File d'attente par piste (v12)
-RUNWAY_WINDOW_MIN = 10     # decollages sur la meme piste dans les N min AVANT
-RUNWAY_WINDOW_AFTER_MIN = 5  # ... et APRES (la file qui suit)
+# Queue per runway (v12)
+RUNWAY_WINDOW_MIN = 10     # takeoffs on the same runway in the N min BEFORE
+RUNWAY_WINDOW_AFTER_MIN = 5  # ... and AFTER (the queue that follows)
 
-# File d'attente ancree sur l'off-block (v15), definitions de la litterature
-QUEUE_RECENT_MIN = 20      # fenetre pour le taxi-out moyen recent (avant mon off-block)
-QUEUE_MIN_RECENT_N = 2     # nombre minimal de departs pour calculer la moyenne
+# Queue anchored on the off-block (v15), definitions from the literature
+QUEUE_RECENT_MIN = 20      # window for the recent mean taxi-out (before my off-block)
+QUEUE_MIN_RECENT_N = 2     # minimum number of departures to compute the mean
 
-# Ensembling (v12) : seeds pour classifieur et regresseurs
+# Ensembling (v12): seeds for the classifier and the regressors
 SEEDS = [42, 7, 123, 2026, 31337]
 
-# Signal de panne de reporting (v10) : corruption des ARRIVEES
+# Reporting-outage signal (v10): corruption of the ARRIVALS
 ARR_WIDE_WINDOW_MIN = 120  # deuxieme fenetre, plus large
-ARR_ANOM_TAXI_S = 3600     # taxi-in aberrant si > ce seuil ou < 0
+ARR_ANOM_TAXI_S = 3600     # aberrant taxi-in if > this threshold or < 0
 
-# ---- Soumission ------------------------------------------------------------
-# Convention imposee par le challenge : <team-name>_v<entier>.parquet
+# ---- Submission -------------------------------------------------------------
+# Convention imposed by the challenge: <team-name>_v<integer>.parquet
 TEAM = "motivated-ostrich"
-START_V = 16                   # numero de la prochaine soumission
+START_V = 16                   # number of the next submission
 GAMMAS = [0.75]                # optimum public
 
-# Target encoding : nombre de folds et force du lissage vers le prior
+# Target encoding: number of folds and strength of the smoothing towards the prior
 TE_FOLDS = 5
 TE_SMOOTH = 50.0
 
@@ -111,46 +111,46 @@ NUM_FEATURES = [
     "type_mismatch",
     "disagree_sched_aobt_s", "disagree_sched_eobt_s", "ratio_sched_aobt",
     "no_flight_id", "no_aircraft_type", "no_aobt",
-    # --- v9 : contexte arrivees ---
+    # --- v9: arrival context ---
     "arr_taxi_mean_win", "arr_taxi_frac_long_win", "arr_taxi_day_mean",
     "arr_count_ctx",
-    # --- v10 : panne de reporting vue par les arrivees ---
-    "arr_corrupt_frac_win",    # part d'arrivees a in-block == sched, +/- 30 min
-    "arr_corrupt_frac_wide",   # idem, +/- 2 h
-    "arr_corrupt_day_frac",    # idem, journee aeroport
-    "arr_anom_frac_win",       # part d'arrivees a taxi-in aberrant, +/- 30 min
-    "arr_anom_frac_wide",      # idem, +/- 2 h
-    # --- v15 : file d'attente ancree sur l'off-block (AOBT_3) ---
-    "q_n_taxiing_rwy",       # departs meme piste deja en roulage a mon off-block (N)
-    "q_n_taxiing_apt",       # idem, tout l'aeroport
-    "q_ahead_dep_rwy",       # departs meme piste qui decollent entre mon off-block et mon decollage (Q)
-    "q_ahead_dep_apt",       # idem, tout l'aeroport
-    "q_ahead_arr_rwy",       # atterrissages meme piste pendant mon roulage
-    "q_recent_taxi_rwy",     # taxi-out moyen (MVT - AOBT_3) des departs meme piste, 20 min avant mon off-block
-    "q_recent_taxi_apt",     # idem, tout l'aeroport
-    "q_recent_n_rwy",        # effectif derriere la moyenne
-    "q_pushback_rate_rwy",   # off-blocks meme piste dans les 10 min avant le mien
-    # --- v12 : file d'attente par piste ---
-    "rwy_dep_before",        # decollages meme piste dans les 10 min avant
-    "rwy_dep_after",         # decollages meme piste dans les 5 min apres
-    "rwy_gap_prev_s",        # intervalle depuis le decollage precedent meme piste
-    "rwy_gap_next_s",        # intervalle jusqu'au decollage suivant meme piste
-    "rwy_arr_before",        # atterrissages meme piste dans les 10 min avant
-    "rwy_share_win",         # part des departs de l'aeroport sur cette piste (+/- 15 min)
-    # --- v9 : enchainement par poste ---
+    # --- v10: reporting outage seen through the arrivals ---
+    "arr_corrupt_frac_win",    # share of arrivals with in-block == sched, +/- 30 min
+    "arr_corrupt_frac_wide",   # same, +/- 2 h
+    "arr_corrupt_day_frac",    # same, airport day
+    "arr_anom_frac_win",       # share of arrivals with an aberrant taxi-in, +/- 30 min
+    "arr_anom_frac_wide",      # same, +/- 2 h
+    # --- v15: queue anchored on the off-block (AOBT_3) ---
+    "q_n_taxiing_rwy",       # departures on the same runway already taxiing at my off-block (N)
+    "q_n_taxiing_apt",       # same, whole airport
+    "q_ahead_dep_rwy",       # departures on the same runway taking off between my off-block and my takeoff (Q)
+    "q_ahead_dep_apt",       # same, whole airport
+    "q_ahead_arr_rwy",       # landings on the same runway during my taxi
+    "q_recent_taxi_rwy",     # mean taxi-out (MVT - AOBT_3) of departures on the same runway, 20 min before my off-block
+    "q_recent_taxi_apt",     # same, whole airport
+    "q_recent_n_rwy",        # count behind the mean
+    "q_pushback_rate_rwy",   # off-blocks on the same runway in the 10 min before mine
+    # --- v12: queue per runway ---
+    "rwy_dep_before",        # takeoffs on the same runway in the previous 10 min
+    "rwy_dep_after",         # takeoffs on the same runway in the next 5 min
+    "rwy_gap_prev_s",        # interval since the previous takeoff on the same runway
+    "rwy_gap_next_s",        # interval until the next takeoff on the same runway
+    "rwy_arr_before",        # landings on the same runway in the previous 10 min
+    "rwy_share_win",         # share of the airport departures on this runway (+/- 15 min)
+    # --- v9: stand chaining ---
     "turnaround_s", "prev_arr_taxi_in", "prev_same_type",
     "prev_same_operator", "sched_before_inblock", "bound_minus_aobt",
     "has_stand_link",
-    # --- v13 : corruption des arrivees au meme poste (signal par avion) ---
-    "prev_arr_corrupt",      # in-block == sched sur l'arrivee precedente
-    "next_arr_corrupt",      # idem sur l'arrivee suivante
-    "both_arr_corrupt",      # les deux (38 % de corruption sur 2025)
+    # --- v13: corruption of the arrivals at the same stand (per-aircraft signal) ---
+    "prev_arr_corrupt",      # in-block == sched on the previous arrival
+    "next_arr_corrupt",      # same on the next arrival
+    "both_arr_corrupt",      # both (38 % corruption in 2025)
 ]
 
-# Features de target encoding (ajoutees dynamiquement au classifieur)
+# Target-encoding features (added dynamically to the classifier)
 TE_SPECS = {
     "te_adep": ["ADEP_mvt"],
-    "te_adep_flight": ["ADEP_mvt", "FLIGHT_mvt"],   # v13 : numero de vol
+    "te_adep_flight": ["ADEP_mvt", "FLIGHT_mvt"],   # v13: flight number
     "te_adep_stand": ["ADEP_mvt", "STAND_mvt"],
     "te_operator": ["AIRCRAFT_OPERATOR_flt"],
     "te_adep_operator": ["ADEP_mvt", "AIRCRAFT_OPERATOR_flt"],
@@ -173,8 +173,8 @@ LGB_REG = dict(
     lambda_l2=1.0, verbosity=-1, seed=42,
 )
 
-# Regresseur B : loss robuste (les pathologiques ne tirent plus tout)
-# v5.1 : retour a la L2 (huber avait degrade B : 3141 s contre 3047 s)
+# Regressor B: robust loss (pathological rows no longer pull everything)
+# v5.1: back to L2 (huber had degraded B: 3141 s vs 3047 s)
 LGB_REG_ROBUST = dict(LGB_REG)
 
 LGB_CLF = dict(
@@ -186,17 +186,17 @@ LGB_CLF = dict(
 
 
 # ----------------------------------------------------------------------------
-# Chargement / features de base (identiques v4)
+# Loading / base features (identical to v4)
 # ----------------------------------------------------------------------------
 
 def load_training(data_dir: Path) -> pd.DataFrame:
     files = sorted(glob.glob(str(data_dir / "training_*.parquet")))
     if not files:
         raise FileNotFoundError(
-            f"Aucun fichier training_*.parquet trouve dans {data_dir.resolve()}")
-    print(f"Chargement de {len(files)} fichiers d'entrainement...")
+            f"No training_*.parquet file found in {data_dir.resolve()}")
+    print(f"Loading {len(files)} training files...")
     df = pd.concat((pd.read_parquet(f) for f in files), ignore_index=True)
-    print(f"  -> {len(df):,} mouvements")
+    print(f"  -> {len(df):,} movements")
     return df
 
 
@@ -252,12 +252,12 @@ def add_congestion_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_runway_queue_features(df: pd.DataFrame) -> pd.DataFrame:
-    """File d'attente au niveau de la PISTE (v12). La congestion aeroport ne
-    dit pas sur quelle piste on attend : ici on compte les decollages sur
-    la meme piste juste avant et juste apres, et les intervalles entre
-    decollages consecutifs (un espacement de 60-90 s trahit une file
-    dense, plusieurs minutes un trafic fluide). Tout est observable dans
-    le ranking (MVT_TIME et RUNWAY des departs ne sont pas masques).
+    """Queue at the RUNWAY level (v12). Airport congestion does not
+    tell which runway one waits for: here we count the takeoffs on
+    the same runway just before and just after, and the intervals between
+    consecutive takeoffs (a 60-90 s spacing reveals a dense queue,
+    several minutes a fluid traffic). Everything is observable in
+    the ranking file (MVT_TIME and RUNWAY of departures are not masked).
     """
     for c in ("rwy_dep_before", "rwy_dep_after", "rwy_gap_prev_s",
               "rwy_gap_next_s", "rwy_arr_before", "rwy_share_win"):
@@ -301,9 +301,9 @@ def add_runway_queue_features(df: pd.DataFrame) -> pd.DataFrame:
                 np.searchsorted(t_arr, t, side="left")
                 - np.searchsorted(t_arr, t - before, side="left"))
 
-    # Part des departs de l'aeroport qui utilisent cette piste (+/- 15 min) :
-    # rwy_dep_win / dep_count_win, ou rwy_dep_win compte les departs de la
-    # meme piste dans la fenetre symetrique.
+    # Share of the airport departures that use this runway (+/- 15 min):
+    # rwy_dep_win / dep_count_win, where rwy_dep_win counts the departures of the
+    # same runway in the symmetric window.
     rwy_win = np.full(len(df), np.nan)
     for k, grp in df[valid & is_dep].groupby(key):
         t = grp["MVT_TIME_UTC_mvt"].dt.tz_localize(None).values.astype("datetime64[ns]")
@@ -357,7 +357,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["no_aircraft_type"] = df["AIRCRAFT_TYPE_mvt"].isna().astype(float)
     df["no_aobt"] = df["delta_mvt_aobt3_s"].isna().astype(float)
 
-    # Cle pour le target encoding horaire
+    # Key for the hourly target encoding
     df["hour_bin"] = mvt.dt.hour
 
     for c in CAT_FEATURES:
@@ -368,11 +368,11 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------
-# Target encoding hors-fold du taux de corruption
+# Out-of-fold target encoding of the corruption rate
 # ----------------------------------------------------------------------------
 
 def _key(df: pd.DataFrame, cols: list) -> pd.Series:
-    """Cle de groupement, en chaine, robuste aux NaN et aux categories."""
+    """Grouping key, as a string, robust to NaN and categories."""
     out = df[cols[0]].astype(str)
     for c in cols[1:]:
         out = out + "|" + df[c].astype(str)
@@ -380,21 +380,21 @@ def _key(df: pd.DataFrame, cols: list) -> pd.Series:
 
 
 def fit_te_maps(df: pd.DataFrame, label: np.ndarray) -> tuple[dict, float]:
-    """Statistiques de target encoding sur un dataframe de reference."""
+    """Target-encoding statistics on a reference dataframe."""
     prior = float(np.mean(label))
     maps = {}
     for name, cols in TE_SPECS.items():
         k = _key(df, cols)
         g = pd.DataFrame({"k": k.values, "y": label}).groupby("k")["y"]
         agg = g.agg(["sum", "count"])
-        # Lissage bayesien vers le prior
+        # Bayesian smoothing towards the prior
         maps[name] = ((agg["sum"] + TE_SMOOTH * prior)
                       / (agg["count"] + TE_SMOOTH))
     return maps, prior
 
 
 def apply_te(df: pd.DataFrame, maps: dict, prior: float) -> pd.DataFrame:
-    """Applique des maps de target encoding (val, ranking, ou fold sortant)."""
+    """Applies target-encoding maps (val, ranking, or held-out fold)."""
     df = df.copy()
     for name, cols in TE_SPECS.items():
         k = _key(df, cols)
@@ -404,8 +404,8 @@ def apply_te(df: pd.DataFrame, maps: dict, prior: float) -> pd.DataFrame:
 
 def add_te_out_of_fold(train: pd.DataFrame, label_col: str,
                        n_folds: int = TE_FOLDS, seed: int = 42) -> pd.DataFrame:
-    """Target encoding hors-fold sur le train : chaque ligne recoit un
-    encodage calcule SANS elle (sur les autres folds), donc pas de fuite.
+    """Out-of-fold target encoding on the training set: each row receives an
+    encoding computed WITHOUT it (on the other folds), hence no leakage.
     """
     train = train.copy()
     rng = np.random.RandomState(seed)
@@ -424,24 +424,24 @@ def add_te_out_of_fold(train: pd.DataFrame, label_col: str,
 
 
 # ----------------------------------------------------------------------------
-# v14 : temps de roulage non entrave (methodologie PRU) par poste-piste
+# v14: unimpeded taxi time (PRU methodology) per stand-runway
 # ----------------------------------------------------------------------------
 #
-# Le taxi-out se decompose en un temps incompressible qui depend de la
-# geometrie (poste, piste, distance a parcourir) et un temps additionnel
-# qui depend de la congestion. La PRU estime le premier comme un bas
-# percentile du taxi observe par couple poste-piste ("unimpeded taxi
-# time"). Ici : percentiles 10 et 50 par (aeroport, poste, piste), avec
-# repli sur (aeroport, piste) puis (aeroport) quand l'effectif est faible.
-# Calcule HORS-FOLD sur l'entrainement, sur les lignes saines et hors
-# queue, pour ne pas fuir la cible.
+# The taxi-out splits into an incompressible time that depends on the
+# geometry (stand, runway, distance to cover) and an additional time
+# that depends on congestion. The PRU estimates the former as a low
+# percentile of the observed taxi per stand-runway pair ("unimpeded taxi
+# time"). Here: percentiles 10 and 50 per (airport, stand, runway), with
+# fallback to (airport, runway) then (airport) when the count is low.
+# Computed OUT-OF-FOLD on the training set, on clean rows outside the
+# tail, so as not to leak the target.
 #
-# Utilisation :
-#   - features numeriques explicites pour A et B (le modele voyait
-#     stand_runway comme une categorie et devait reapprendre la geometrie
-#     par decoupage, sans generaliser aux couples rares ou nouveaux)
-#   - cible du regresseur B (sans AOBT_3) : EXCEDENT = taxi - p50, plus
-#     stable que le taxi brut, comme le residu AOBT_3 l'est pour A
+# Usage:
+#   - explicit numerical features for A and B (the model saw
+#     stand_runway as a category and had to relearn the geometry
+#     by splitting, without generalizing to rare or new pairs)
+#   - target of regressor B (without AOBT_3): EXCESS = taxi - p50, more
+#     stable than the raw taxi, as the AOBT_3 residual is for A
 
 UNIMP_MIN_N = 20
 UNIMP_LEVELS = [["ADEP_mvt", "STAND_mvt", "RUNWAY_mvt"],
@@ -452,7 +452,7 @@ UNIMP_FEATURES = ["unimpeded_p10", "unimpeded_p50", "unimpeded_n",
 
 
 def _unimp_stats_mask(df: pd.DataFrame) -> np.ndarray:
-    """Lignes utilisees pour les statistiques : saines et hors queue."""
+    """Rows used for the statistics: clean and outside the tail."""
     ok = (df[TARGET].values <= TAIL_THR)
     if CORRUPT in df.columns:
         ok &= (df[CORRUPT].values == 0)
@@ -460,7 +460,7 @@ def _unimp_stats_mask(df: pd.DataFrame) -> np.ndarray:
 
 
 def fit_unimpeded_maps(df: pd.DataFrame) -> list:
-    """Une table (p10, p50, n) par niveau de la hierarchie."""
+    """One table (p10, p50, n) per level of the hierarchy."""
     sub = df[_unimp_stats_mask(df)]
     maps = []
     for cols in UNIMP_LEVELS:
@@ -513,7 +513,7 @@ def add_unimpeded_out_of_fold(train: pd.DataFrame, n_folds: int = TE_FOLDS,
 
 
 # ----------------------------------------------------------------------------
-# Utilitaires modele
+# Model utilities
 # ----------------------------------------------------------------------------
 
 def prepare_matrix(df, train_categories=None, extra=()):
@@ -549,9 +549,9 @@ def rmse(a, b):
 
 
 class Ensemble:
-    """Moyenne de modeles LightGBM entraines avec des seeds differentes.
-    Expose predict() et best_iteration (moyenne des rounds retenus) pour
-    rester interchangeable avec un modele unique."""
+    """Mean of LightGBM models trained with different seeds.
+    Exposes predict() and best_iteration (mean of the kept rounds) to
+    remain interchangeable with a single model."""
 
     def __init__(self, models, iters=None):
         self.models = models
@@ -572,9 +572,9 @@ class Ensemble:
 
 def train_ensemble(params, X, y, X_val=None, y_val=None, num_rounds=5000,
                    stopping=200, seeds=None, fixed_rounds=None, label=""):
-    """Entraine un modele par seed. Avec X_val : early stopping par seed.
-    Avec fixed_rounds : liste (ou entier) de rounds par seed, sans
-    validation (reentrainement final)."""
+    """Trains one model per seed. With X_val: early stopping per seed.
+    With fixed_rounds: list (or integer) of rounds per seed, without
+    validation (final retraining)."""
     seeds = seeds or SEEDS
     models, iters = [], []
     for k, sd in enumerate(seeds):
@@ -595,7 +595,7 @@ def train_ensemble(params, X, y, X_val=None, y_val=None, num_rounds=5000,
 
 
 # ----------------------------------------------------------------------------
-# v9 : features contextuelles (calculees sur DEP + ARR avant filtrage)
+# v9: contextual features (computed on DEP + ARR before filtering)
 # ----------------------------------------------------------------------------
 
 def _naive_ns(s: pd.Series) -> np.ndarray:
@@ -604,18 +604,18 @@ def _naive_ns(s: pd.Series) -> np.ndarray:
 
 
 def add_arrival_context(df: pd.DataFrame) -> pd.DataFrame:
-    """Contexte fourni par les ARRIVEES au meme aeroport autour de chaque
-    mouvement. Tout est vectorise par sommes cumulees sur les arrivees
-    triees.
+    """Context provided by the ARRIVALS at the same airport around each
+    movement. Everything is vectorized with cumulative sums over the sorted
+    arrivals.
 
-    v9  : taxi-in (congestion / meteo contemporaines).
-    v10 : corruption des arrivees (in-block == heure programmee) et
-          anomalies de taxi-in. Hypothese verifiee sur 2025 : quand plus de
-          30 % des arrivees d'une heure sont corrompues, 23 a 30 % des
-          departs le sont aussi, contre 4 % sinon. Un aeroport qui ne
-          reporte pas ses off-blocks ne reporte pas non plus ses
-          in-blocks : c'est un signal de PANNE DE REPORTING, contemporain,
-          observable dans le ranking (les arrivees y sont completes).
+    v9  : taxi-in (contemporary congestion / weather).
+    v10 : corruption of the arrivals (in-block == scheduled time) and
+          taxi-in anomalies. Hypothesis checked on 2025: when more than
+          30 % of the arrivals of an hour are corrupted, 23 to 30 % of the
+          departures are too, against 4 % otherwise. An airport that does
+          not report its off-blocks does not report its
+          in-blocks either: it is a REPORTING OUTAGE signal, contemporary,
+          observable in the ranking file (arrivals are complete there).
     """
     df = df.copy()
     win = pd.Timedelta(minutes=ARR_WINDOW_MIN).to_timedelta64()
@@ -684,7 +684,7 @@ def add_arrival_context(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[idx, "arr_corrupt_frac_wide"] = ww["corrupt"]
         df.loc[idx, "arr_anom_frac_wide"] = ww["anom"]
 
-    # Agregats journaliers par aeroport (arrivees seulement)
+    # Daily aggregates per airport (arrivals only)
     day = df["MVT_TIME_UTC_mvt"].dt.floor("D")
     key = df["_airport"].astype(str) + "|" + day.astype(str)
     arr_df = pd.DataFrame({
@@ -700,26 +700,26 @@ def add_arrival_context(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
-    """File d'attente ANCREE SUR L'OFF-BLOCK (v15).
+    """Queue ANCHORED ON THE OFF-BLOCK (v15).
 
-    Toutes nos features de congestion etaient centrees sur l'heure de
-    decollage. La litterature (Idris 2001, Ravizza 2014, Wang 2021, revue
-    Yin 2024) est unanime : la variable la plus predictive est la taille de
-    la file au moment du push-back, et le taxi-out moyen des departs
-    recents. Dans le ranking, BLOCK_TIME est masque pour les departs mais
-    AOBT_3 (off-block NM) ne l'est pas, et MVT_TIME non plus : on
-    reconstruit donc ces quantites avec AOBT_3 comme off-block.
+    All our congestion features were centered on the takeoff
+    time. The literature (Idris 2001, Ravizza 2014, Wang 2021, review by
+    Yin 2024) is unanimous: the most predictive variable is the size of
+    the queue at push-back, and the mean taxi-out of recent
+    departures. In the ranking file, BLOCK_TIME is masked for departures but
+    AOBT_3 (NM off-block) is not, and neither is MVT_TIME: we
+    therefore rebuild these quantities with AOBT_3 as the off-block.
 
-      N  : departs deja en roulage quand je pousse
-           (leur AOBT_3 < mon AOBT_3 < leur MVT_TIME)
-      Q  : departs qui decollent entre mon AOBT_3 et mon MVT_TIME
-           (ceux qui sont passes devant moi dans la file)
-      recent : moyenne de (MVT_TIME - AOBT_3) des departs dont le decollage
-           precede mon off-block, dans les QUEUE_RECENT_MIN minutes
-      pushback_rate : off-blocks dans les 10 min avant le mien
+      N  : departures already taxiing when I push back
+           (their AOBT_3 < my AOBT_3 < their MVT_TIME)
+      Q  : departures taking off between my AOBT_3 and my MVT_TIME
+           (those that overtook me in the queue)
+      recent : mean of (MVT_TIME - AOBT_3) of the departures whose takeoff
+           precedes my off-block, within QUEUE_RECENT_MIN minutes
+      pushback_rate : off-blocks in the 10 min before mine
 
-    Calcule par piste et par aeroport, avec searchsorted / sommes cumulees.
-    Les departs sans AOBT_3 recoivent NaN (LightGBM les gere).
+    Computed per runway and per airport, with searchsorted / cumulative sums.
+    Departures without AOBT_3 get NaN (handled by LightGBM).
     """
     cols = ["q_n_taxiing_rwy", "q_n_taxiing_apt", "q_ahead_dep_rwy",
             "q_ahead_dep_apt", "q_ahead_arr_rwy", "q_recent_taxi_rwy",
@@ -740,29 +740,29 @@ def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
     push_win = pd.Timedelta(minutes=10).to_timedelta64()
 
     def queue_stats(t_ob_q, t_mvt_q, t_ob_ref, t_mvt_ref):
-        """Pour des requetes (t_ob_q, t_mvt_q) contre une population de
-        departs de reference (off-block, decollage) triee par decollage."""
+        """For queries (t_ob_q, t_mvt_q) against a population of reference
+        departures (off-block, takeoff) sorted by takeoff."""
         order = np.argsort(t_mvt_ref)
         mvt_s = t_mvt_ref[order]
         ob_by_mvt = t_ob_ref[order]
         taxi_by_mvt = (mvt_s - ob_by_mvt) / np.timedelta64(1, "s")
         ob_s = np.sort(t_ob_ref)
 
-        # N : off-block avant le mien ET decollage apres le mien
-        #   = (#ob < mine) - (#ob < mine et mvt < mine)
-        #   Le second terme = nombre de ref entierement passes avant mon ob :
-        #   approx par #mvt < mon ob (un ref decolle avant mon ob a
-        #   forcement pousse avant), exact.
+        # N: off-block before mine AND takeoff after mine
+        #   = (#ob < mine) - (#ob < mine and mvt < mine)
+        #   The second term = number of refs entirely done before my ob:
+        #   approximated by #mvt < my ob (a ref that took off before my ob
+        #   necessarily pushed back before), exact.
         n_ob_before = np.searchsorted(ob_s, t_ob_q, side="left")
         n_mvt_before_ob = np.searchsorted(mvt_s, t_ob_q, side="left")
         n_taxiing = np.maximum(n_ob_before - n_mvt_before_ob, 0)
 
-        # Q : decollages entre mon off-block et mon decollage (exclus moi)
+        # Q: takeoffs between my off-block and my takeoff (me excluded)
         lo = np.searchsorted(mvt_s, t_ob_q, side="left")
         hi = np.searchsorted(mvt_s, t_mvt_q, side="left")
         q_ahead = np.maximum(hi - lo, 0)
 
-        # taxi-out moyen des departs qui ont decolle dans [ob - recent, ob)
+        # mean taxi-out of the departures that took off in [ob - recent, ob)
         cs = np.concatenate([[0.0], np.cumsum(taxi_by_mvt)])
         lo_r = np.searchsorted(mvt_s, t_ob_q - recent, side="left")
         hi_r = np.searchsorted(mvt_s, t_ob_q, side="left")
@@ -771,13 +771,13 @@ def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
             recent_mean = np.where(n_r >= QUEUE_MIN_RECENT_N,
                                    (cs[hi_r] - cs[lo_r]) / n_r, np.nan)
 
-        # off-blocks dans les 10 min avant le mien (moi exclu)
+        # off-blocks in the 10 min before mine (me excluded)
         push = (np.searchsorted(ob_s, t_ob_q, side="left")
                 - np.searchsorted(ob_s, t_ob_q - push_win, side="left"))
         return n_taxiing, q_ahead, recent_mean, n_r, push
 
     dep_idx = np.where(is_dep & has_ob)[0]
-    # ---- par aeroport ----
+    # ---- per airport ----
     for apt in np.unique(airport[dep_idx]):
         sel = dep_idx[airport[dep_idx] == apt]
         if len(sel) == 0:
@@ -788,7 +788,7 @@ def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
         df.iloc[sel, df.columns.get_loc("q_ahead_dep_apt")] = q_a
         df.iloc[sel, df.columns.get_loc("q_recent_taxi_apt")] = r_m
 
-        # ---- par piste ----
+        # ---- per runway ----
         sel_r = sel[rwy_ok[sel]]
         for r in np.unique(rwy[sel_r]):
             s_r = sel_r[rwy[sel_r] == r]
@@ -800,7 +800,7 @@ def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
             df.iloc[s_r, df.columns.get_loc("q_recent_n_rwy")] = n_r
             df.iloc[s_r, df.columns.get_loc("q_pushback_rate_rwy")] = push
 
-            # atterrissages sur la meme piste pendant mon roulage
+            # landings on the same runway during my taxi
             arr_sel = np.where((~is_dep) & (airport == apt) & rwy_ok & (rwy == r)
                                & ~np.isnat(t_mvt_all))[0]
             if len(arr_sel):
@@ -814,8 +814,8 @@ def add_offblock_queue_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_stand_linking(df: pd.DataFrame) -> pd.DataFrame:
-    """Appaire chaque depart a la derniere arrivee au meme poste du meme
-    aeroport dont l'in-block precede le decollage (merge_asof backward).
+    """Matches each departure to the last arrival at the same stand of the same
+    airport whose in-block precedes the takeoff (backward merge_asof).
     """
     df = df.copy()
     for c in ("turnaround_s", "prev_arr_taxi_in", "prev_same_type",
@@ -825,7 +825,7 @@ def add_stand_linking(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = np.nan
     df["has_stand_link"] = 0.0
 
-    # Corruption des arrivees (in-block == heure programmee)
+    # Corruption of the arrivals (in-block == scheduled time)
     gap_arr = (df["BLOCK_TIME_UTC_mvt"] - df["SCHED_TIME_UTC_mvt"]).dt.total_seconds()
     arr_corrupt_all = (gap_arr.abs() <= CORRUPT_TOL_S).astype(float)
 
@@ -863,8 +863,8 @@ def add_stand_linking(df: pd.DataFrame) -> pd.DataFrame:
         tolerance=pd.Timedelta(hours=STAND_LINK_MAX_H),
         suffixes=("", "_arr"),
     )
-    # merge_asof ne garde pas la cle temporelle de droite : on la recupere
-    # via un second asof sur la seule colonne temps.
+    # merge_asof does not keep the right-hand time key: we recover it
+    # with a second asof on the time column alone.
     arr_t = arr[["_key", "_t"]].rename(columns={"_t": "_t_inblock"})
     arr_t["_t"] = arr_t["_t_inblock"]
     linked = pd.merge_asof(
@@ -892,9 +892,9 @@ def add_stand_linking(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[idx[has], "prev_same_operator"] = same_op[has].astype(float)
     df.loc[idx[has], "prev_arr_corrupt"] = linked["_arr_corrupt"].values[has]
 
-    # Arrivee SUIVANTE au meme poste (signal non causal, mais observable
-    # dans le ranking : les arrivees y sont completes ; autorise par les
-    # organisateurs, a documenter dans le depot)
+    # NEXT arrival at the same stand (non-causal signal, but observable
+    # in the ranking file: arrivals are complete there; allowed by the
+    # organizers, to be documented in the repository)
     nxt = pd.merge_asof(
         dep.sort_values("_t"), arr[["_key", "_t", "_arr_corrupt"]].sort_values("_t"),
         on="_t", by="_key", direction="forward",
@@ -910,11 +910,11 @@ def add_stand_linking(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_stand_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Derives du linking qui dependent des deltas (apres build_features)."""
+    """Linking derivatives that depend on the deltas (after build_features)."""
     df = df.copy()
     has = df["turnaround_s"].notna()
-    # SCHED anterieur a l'in-block de l'arrivee precedente au meme poste :
-    # un block = sched serait alors physiquement impossible.
+    # SCHED earlier than the in-block of the previous arrival at the same stand:
+    # a block = sched would then be physically impossible.
     df["sched_before_inblock"] = np.where(
         has, (df["delta_mvt_sched_s"] > df["turnaround_s"]).astype(float), np.nan)
     df["bound_minus_aobt"] = np.where(
@@ -923,31 +923,31 @@ def add_stand_derived(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------
-# v11 : branche dediee au regime "Rome, non apparie, decollage le lendemain"
+# v11: dedicated branch for the "Rome, unmatched, takeoff on the next day" regime
 # ----------------------------------------------------------------------------
 #
-# Diagnostic sur 2025 (168 vols LIRF non apparies decollant le lendemain de
-# la date programmee, heure locale) :
+# Diagnostic on 2025 (168 unmatched LIRF flights taking off the day after
+# the scheduled date, local time):
 #
-#   delta_sched            +1 jour   block=sched   normal
+#   delta_sched            +1 day    block=sched   normal
 #   3 h  - 12 h              0-1         106          33
 #   > 12 h                    11          16           0
 #
-# Sur ce sous-ensemble, le "taxi-out" n'est presque jamais un taxi-out :
-# c'est soit delta_sched (block time rempli avec l'heure programmee), soit
-# 86 400 + roulage (block estampille a la date programmee avec l'heure
-# reelle du lendemain). Une demi-douzaine de ces lignes par fold de
-# validation portent environ la moitie du MSE total, parce que leurs
-# erreurs se comptent en dizaines de milliers de secondes.
+# On this subset, the "taxi-out" is almost never a taxi-out:
+# it is either delta_sched (block time filled with the scheduled time), or
+# 86,400 + taxi (block stamped with the scheduled date and the actual
+# time of the next day). Half a dozen of these rows per validation
+# fold carry about half of the total MSE, because their
+# errors amount to tens of thousands of seconds.
 #
-# Prediction en esperance, par tranche de retard, avec taux estimes sur
-# l'entrainement (lissage de Laplace) :
+# Expected-value prediction, per delay bucket, with rates estimated on
+# the training set (Laplace smoothing):
 #
 #   pred = r_plus1 * (86400 + mu_normal) + r_bs * delta_sched
 #          + r_normal * mu_normal
 #
-# Les 12 cas "+1 jour" sont repartis sur toute l'annee 2025 : bug
-# structurel du systeme de Fiumicino, presume present en 2026.
+# The 12 "+1 day" cases are spread over the whole of 2025: a structural
+# bug of the Fiumicino system, presumed present in 2026.
 
 ROME_AIRPORT = "LIRF"
 ROME_TZ = "Europe/Rome"
@@ -957,8 +957,8 @@ DAY_S = 86400.0
 
 
 def rome_subset_mask(df: pd.DataFrame) -> np.ndarray:
-    """LIRF, non apparie NM, decollage le lendemain (date locale) du jour
-    programme. Tout est observable dans le ranking."""
+    """LIRF, not matched to NM, takeoff on the day after (local date) the scheduled
+    day. Everything is observable in the ranking file."""
     is_rome = df["ADEP_mvt"].astype(str).values == ROME_AIRPORT
     unmatched = df["no_flight_id"].values == 1
     mvt_d = df["MVT_TIME_UTC_mvt"].dt.tz_convert(ROME_TZ).dt.floor("D")
@@ -972,7 +972,7 @@ def rome_bucket(delta_sched: np.ndarray) -> np.ndarray:
 
 
 def rome_categorize(df: pd.DataFrame) -> np.ndarray:
-    """0 = +1 jour, 1 = block = sched, 2 = normal (priorite dans cet ordre)."""
+    """0 = +1 day, 1 = block = sched, 2 = normal (priority in this order)."""
     y = df[TARGET].values
     ds = df["delta_mvt_sched_s"].values
     plus1 = (y - DAY_S >= TAXI_MIN_S) & (y - DAY_S <= TAXI_MAX_S)
@@ -981,7 +981,7 @@ def rome_categorize(df: pd.DataFrame) -> np.ndarray:
 
 
 def fit_rome_rates(train_df: pd.DataFrame) -> np.ndarray:
-    """Taux (3 categories) par tranche de retard, lisses. Forme (4, 3)."""
+    """Rates (3 categories) per delay bucket, smoothed. Shape (4, 3)."""
     m = rome_subset_mask(train_df)
     sub = train_df[m]
     b = rome_bucket(sub["delta_mvt_sched_s"].values)
@@ -995,8 +995,8 @@ def fit_rome_rates(train_df: pd.DataFrame) -> np.ndarray:
 
 def apply_rome_branch(pred: np.ndarray, df: pd.DataFrame, mu_normal: np.ndarray,
                       rates: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Remplace la prediction sur le sous-ensemble par l'esperance du
-    melange a trois regimes. Retourne (pred modifiee, masque)."""
+    """Replaces the prediction on the subset with the expectation of the
+    three-regime mixture. Returns (modified pred, mask)."""
     m = rome_subset_mask(df)
     if not m.any():
         return pred, m
@@ -1013,28 +1013,28 @@ def apply_rome_branch(pred: np.ndarray, df: pd.DataFrame, mu_normal: np.ndarray,
 # ----------------------------------------------------------------------------
 
 def build_all(raw: pd.DataFrame) -> pd.DataFrame:
-    """Chaine complete de features sur un tableau DEP + ARR. Utilisee a
-    l'identique pour l'entrainement et pour le ranking."""
+    """Full feature chain on a DEP + ARR table. Used identically
+    for training and for the ranking file."""
     raw = parse_times(raw)
     print("  congestion...")
     raw = add_congestion_features(raw)
-    print("  contexte arrivees...")
+    print("  arrival context...")
     raw = add_arrival_context(raw)
-    print("  enchainement par poste...")
+    print("  stand chaining...")
     raw = add_stand_linking(raw)
-    print("  file d'attente a l'off-block (AOBT_3)...")
+    print("  queue at off-block (AOBT_3)...")
     raw = add_offblock_queue_features(raw)
     if USE_DEMAND:
-        print("  file de demande (SCHED / EOBT)...")
+        print("  demand queue (SCHED / EOBT)...")
         raw = add_demand_queue_features(raw)
     if USE_DEGRADED:
-        print("  journee degradee (taxi-in rapporte a la norme)...")
+        print("  degraded day (taxi-in relative to its norm)...")
         raw = add_degraded_day_features(raw)
     if USE_FOLLOWING:
         print("  contexte posterieur (decollages suivants)...")
         raw = add_following_features(raw)
     if USE_NEIGHBOR:
-        print("  voisinage de poste, aeroport et arrivees...")
+        print("  stand, airport and arrival neighborhood...")
         raw = add_neighbor_features(raw)
     dep = raw[raw["PHASE_mvt"] == "DEP"].copy()
     dep = build_features(dep)
@@ -1044,13 +1044,13 @@ def build_all(raw: pd.DataFrame) -> pd.DataFrame:
 
 def load_or_build(cache_path: Path) -> pd.DataFrame:
     if USE_CACHE and cache_path.exists():
-        print(f"Chargement du cache {cache_path.name}...")
+        print(f"Loading cache {cache_path.name}...")
         dep = pd.read_parquet(cache_path)
-        print(f"  -> {len(dep):,} departs")
+        print(f"  -> {len(dep):,} departures")
         return dep
 
     raw = load_training(DATA_DIR)
-    print("Calcul des features (entrainement)...")
+    print("Computing features (training)...")
     dep = build_all(raw)
     del raw
     gap = (dep["BLOCK_TIME_UTC_mvt"]
@@ -1058,47 +1058,47 @@ def load_or_build(cache_path: Path) -> pd.DataFrame:
     dep[CORRUPT] = (gap.abs() <= CORRUPT_TOL_S).astype(int)
     n0 = len(dep)
     dep = dep[dep[TARGET].notna() & (dep[TARGET] >= TAXI_MIN_S)]
-    print(f"Filtrage minimal : {n0 - len(dep):,} retirees, reste {len(dep):,}")
+    print(f"Minimal filtering: {n0 - len(dep):,} removed, {len(dep):,} left")
     dep.to_parquet(cache_path)
-    print(f"Cache ecrit : {cache_path.name}")
+    print(f"Cache written: {cache_path.name}")
     return dep
 
 
 def main_v16():
     dep = load_or_build(CACHE_PATH)
-    print(f"Lignes corrompues : {dep[CORRUPT].mean():.2%}")
-    print(f"Appariement poste disponible : {dep['has_stand_link'].mean():.1%} "
-          f"(meme type avion : {dep['prev_same_type'].mean():.1%})")
-    print(f"Contexte arrivees disponible : "
+    print(f"Corrupted rows: {dep[CORRUPT].mean():.2%}")
+    print(f"Stand matching available: {dep['has_stand_link'].mean():.1%} "
+          f"(same aircraft type: {dep['prev_same_type'].mean():.1%})")
+    print(f"Arrival context available: "
           f"{dep['arr_taxi_mean_win'].notna().mean():.1%}")
-    print(f"File a l'off-block : Q dispo {dep['q_ahead_dep_rwy'].notna().mean():.1%}, "
+    print(f"Queue at off-block: Q available {dep['q_ahead_dep_rwy'].notna().mean():.1%}, "
           f"N median {dep['q_n_taxiing_rwy'].median():.0f}, Q median {dep['q_ahead_dep_rwy'].median():.0f}, "
-          f"taxi recent piste median {dep['q_recent_taxi_rwy'].median():.0f} s")
+          f"recent runway taxi median {dep['q_recent_taxi_rwy'].median():.0f} s")
     hi = dep["arr_corrupt_frac_win"] > 0.3
-    print(f"Departs dans une fenetre a >30 % d'arrivees corrompues : "
-          f"{hi.mean():.2%}, dont corrompus : {dep.loc[hi, CORRUPT].mean():.1%} "
+    print(f"Departures in a window with >30 % corrupted arrivals: "
+          f"{hi.mean():.2%}, of which corrupted: {dep.loc[hi, CORRUPT].mean():.1%} "
           f"(base : {dep[CORRUPT].mean():.1%})")
 
     is_val = dep["month"].isin(VAL_MONTHS)
     tr_all, va_all = dep[~is_val].copy(), dep[is_val].copy()
-    print(f"Split temporel : train {len(tr_all):,} / val {len(va_all):,}")
+    print(f"Temporal split: train {len(tr_all):,} / val {len(va_all):,}")
 
-    print(f"\nTarget encoding hors-fold ({TE_FOLDS} folds)...")
+    print(f"\nOut-of-fold target encoding ({TE_FOLDS} folds)...")
     tr_all = add_te_out_of_fold(tr_all, CORRUPT)
     maps_tr, prior_tr = fit_te_maps(tr_all, tr_all[CORRUPT].values)
     va_all = apply_te(va_all, maps_tr, prior_tr)
 
-    print("Temps non entrave hors-fold (p10 / p50 par poste-piste)...")
+    print("Out-of-fold unimpeded time (p10 / p50 per stand-runway)...")
     tr_all = add_unimpeded_out_of_fold(tr_all)
     umaps_tr = fit_unimpeded_maps(tr_all)
     va_all = apply_unimpeded(va_all, umaps_tr)
     lv = va_all["unimpeded_level"]
-    print(f"  niveau poste-piste : {(lv == 0).mean():.1%}, piste : {(lv == 1).mean():.1%}, "
-          f"aeroport : {(lv == 2).mean():.1%}")
+    print(f"  stand-runway level: {(lv == 0).mean():.1%}, runway: {(lv == 1).mean():.1%}, "
+          f"airport: {(lv == 2).mean():.1%}")
     cl = va_all[(va_all[CORRUPT] == 0) & (va_all[TARGET] <= TAIL_THR)]
-    print(f"  RMSE naif p50 seul sur les saines hors queue : "
+    print(f"  naive p50-only RMSE on clean rows outside the tail: "
           f"{rmse(cl['unimpeded_p50'], cl[TARGET]):.1f} s "
-          f"(mediane globale : {rmse(np.full(len(cl), cl[TARGET].median()), cl[TARGET]):.1f} s)")
+          f"(global median: {rmse(np.full(len(cl), cl[TARGET].median()), cl[TARGET]):.1f} s)")
 
     y_va = va_all[TARGET].values
     sched = va_all["delta_mvt_sched_s"].values
@@ -1109,23 +1109,23 @@ def main_v16():
     X_tr = prepare_matrix(tr_all, extra=TE_FEATURES + UNIMP_FEATURES)
     X_va = prepare_matrix(va_all, catsAll, extra=TE_FEATURES + UNIMP_FEATURES)
 
-    # ---- Classifieur de corruption ----------------------------------------
-    print("\n-- Classifieur de corruption --")
+    # ---- Corruption classifier -------------------------------------------
+    print("\n-- Corruption classifier --")
     clf_c = train_ensemble(LGB_CLF, X_tr, tr_all[CORRUPT].values,
                            X_va, va_all[CORRUPT].values, num_rounds=3000,
                            stopping=150, label="clf")
     bestC = clf_c.iters
     p_c = clf_c.predict(X_va)
     y_corr = va_all[CORRUPT].values
-    print(f"Taux reel {y_corr.mean():.2%} | p moyen {p_c.mean():.2%}")
+    print(f"True rate {y_corr.mean():.2%} | mean p {p_c.mean():.2%}")
     for thr in (0.3, 0.5, 0.7, 0.9):
         sel = p_c > thr
         if sel.sum():
-            print(f"  p > {thr} : {sel.sum():6,} lignes, "
+            print(f"  p > {thr}: {sel.sum():6,} rows, "
                   f"precision {y_corr[sel].mean():5.1%}, "
-                  f"rappel {y_corr[sel].sum() / max(y_corr.sum(), 1):5.1%}"
+                  f"recall {y_corr[sel].sum() / max(y_corr.sum(), 1):5.1%}"
                   f"  (v14 a p>0.5 : 71.8 % / 11.1 %)")
-    print("\nTop 12 features du classifieur (gain) :")
+    print("\nTop 12 classifier features (gain):")
     print(pd.Series(clf_c.feature_importance(importance_type="gain"),
                     index=X_tr.columns).sort_values(ascending=False)
           .head(12).to_string())
@@ -1145,7 +1145,7 @@ def main_v16():
                              tA["residual"].values,
                              prepare_matrix(vA, cA, extra=TE_FEATURES + UNIMP_FEATURES),
                              vA["residual"].values, label="regA")
-        # Regresseur B : cible = EXCEDENT sur le temps non entrave (p50)
+        # Regressor B: target = EXCESS over the unimpeded time (p50)
         cB = get_categories(train_df)
         yB = (train_df[TARGET] - train_df["unimpeded_p50"].fillna(
             train_df[TARGET].median())).values
@@ -1165,7 +1165,7 @@ def main_v16():
         return mA_, cA, mA_.iters, mB_, cB, iB
 
     def fit_pair_fixed(train_df, rounds_a, rounds_b):
-        """Reentrainement final : rounds figes PAR SEED (ceux valides)."""
+        """Final retraining: rounds frozen PER SEED (the validated ones)."""
         ha_t = train_df["delta_mvt_aobt3_s"].notna()
         tA = train_df[ha_t].copy()
         tA["residual"] = tA[TARGET] - tA["delta_mvt_aobt3_s"]
@@ -1191,16 +1191,16 @@ def main_v16():
                 prepare_matrix(df[~ha], cb, extra=TE_FEATURES + UNIMP_FEATURES))
         return np.clip(out, TAXI_MIN_S, TAXI_MAX_S)
 
-    # ---- Regresseurs ---------------------------------------------------------
-    print("\n-- Regresseur A (residu AOBT_3, lignes saines) --")
+    # ---- Regressors ------------------------------------------------------------
+    print("\n-- Regressor A (AOBT_3 residual, clean rows) --")
     mA, cA, iA, mB, cB, iB = fit_pair(clean_tr, clean_va)
     ha_v = clean_va["delta_mvt_aobt3_s"].notna()
     vA_ = clean_va[ha_v]
     r_ens = rmse(mA.predict(prepare_matrix(vA_, cA, extra=TE_FEATURES + UNIMP_FEATURES)),
                  (vA_[TARGET] - vA_["delta_mvt_aobt3_s"]).values)
-    print(f"   RMSE residu, ensemble {len(SEEDS)} seeds : {r_ens:.1f} s "
+    print(f"   residual RMSE, ensemble of {len(SEEDS)} seeds: {r_ens:.1f} s "
           f"(v14 : 225.4 s)")
-    print("\nTop 15 features du regresseur A (gain) :")
+    print("\nTop 15 features of regressor A (gain):")
     print(pd.Series(mA.feature_importance(importance_type="gain"),
                     index=prepare_matrix(clean_tr.head(1), extra=TE_FEATURES + UNIMP_FEATURES).columns)
           .sort_values(ascending=False).head(15).to_string())
@@ -1209,14 +1209,14 @@ def main_v16():
     nb = clean_va["delta_mvt_aobt3_s"].isna().values
     if nb.any():
         idx_nb = va_all.index.get_indexer(clean_va.index[nb])
-        print(f"   RMSE B sans AOBT_3 (en taxi, excedent + p50) : "
+        print(f"   RMSE of B without AOBT_3 (as taxi, excess + p50): "
               f"{rmse(mu_normal[idx_nb], clean_va.loc[nb, TARGET]):.1f} s  (v14 : 3038 s)")
 
-    # ---- Melange et balayage ---------------------------------------------
+    # ---- Mixture and sweep ------------------------------------------------
     print("\n" + "=" * 68)
-    print("MELANGE (reference v14 : 369.3 s melange seul, 345.9 s avec Rome)")
+    print("MIXTURE (v14 reference: 369.3 s mixture alone, 345.9 s with Rome)")
     print("=" * 68)
-    print(f"RMSE sans melange : {rmse(mu_normal, y_va):.1f} s  (v14 : 531.6)")
+    print(f"RMSE without mixture: {rmse(mu_normal, y_va):.1f} s  (v14: 531.6)")
     g0, best_r = None, np.inf
     for g in (0.5, 0.6, 0.75, 1.0):
         pg = np.where(ok, p_c ** g, 0.0)
@@ -1226,71 +1226,71 @@ def main_v16():
         if r < best_r:
             best_r, g0, mark = r, g, "  <--"
         print(f"    p^{g:<5} : {r:8.1f} s{mark}")
-    print(f"\nRMSE melange seul : {best_r:.1f} s (p^{g0})   [v14 : 369.3 s]")
+    print(f"\nRMSE mixture alone: {best_r:.1f} s (p^{g0})   [v14: 369.3 s]")
 
     final_val = np.maximum(np.where(ok, p_c ** g0, 0.0) * sched_safe
                            + (1 - np.where(ok, p_c ** g0, 0.0)) * mu_normal,
                            TAXI_MIN_S)
-    # ---- v11 : branche Rome ------------------------------------------------
+    # ---- v11: Rome branch --------------------------------------------------
     print("\n" + "=" * 68)
-    print("BRANCHE ROME (non apparie, decollage le lendemain)")
+    print("ROME BRANCH (unmatched, takeoff on the next day)")
     print("=" * 68)
     rates_tr = fit_rome_rates(tr_all)
-    print("Taux estimes sur l'entrainement (par tranche de delta_sched) :")
+    print("Rates estimated on the training set (per delta_sched bucket):")
     labels = ["0-1 h", "1-3 h", "3-12 h", "> 12 h"]
     for k in range(4):
-        print(f"  {labels[k]:7s} : +1 jour {rates_tr[k, 0]:5.1%}  "
+        print(f"  {labels[k]:7s}: +1 day {rates_tr[k, 0]:5.1%}  "
               f"block=sched {rates_tr[k, 1]:5.1%}  normal {rates_tr[k, 2]:5.1%}")
 
     rmse_before = rmse(final_val, y_va)
     final_rome, m_rome = apply_rome_branch(final_val, va_all, mu_normal, rates_tr)
     rmse_after = rmse(final_rome, y_va)
-    print(f"\nSous-ensemble en validation : {m_rome.sum()} vols")
+    print(f"\nValidation subset: {m_rome.sum()} flights")
     if m_rome.any():
         cat_va = rome_categorize(va_all[m_rome])
-        print(f"  composition reelle : +1 jour {(cat_va == 0).sum()}, "
+        print(f"  actual composition: +1 day {(cat_va == 0).sum()}, "
               f"block=sched {(cat_va == 1).sum()}, normal {(cat_va == 2).sum()}")
         e_before = final_val[m_rome] - y_va[m_rome]
         e_after = final_rome[m_rome] - y_va[m_rome]
         n_va = len(y_va)
-        print(f"  contribution au MSE : avant {np.sum(e_before**2)/n_va:,.0f}, "
-              f"apres {np.sum(e_after**2)/n_va:,.0f}  "
-              f"(MSE total avant : {rmse_before**2:,.0f})")
-    print(f"\nRMSE sans branche Rome : {rmse_before:.1f} s")
-    print(f"RMSE avec branche Rome : {rmse_after:.1f} s   "
-          f"(gain {rmse_before - rmse_after:+.1f} s)   [v14 : 345.9 s]")
+        print(f"  MSE contribution: before {np.sum(e_before**2)/n_va:,.0f}, "
+              f"after {np.sum(e_after**2)/n_va:,.0f}  "
+              f"(total MSE before: {rmse_before**2:,.0f})")
+    print(f"\nRMSE without Rome branch: {rmse_before:.1f} s")
+    print(f"RMSE with Rome branch   : {rmse_after:.1f} s   "
+          f"(gain {rmse_before - rmse_after:+.1f} s)   [v14: 345.9 s]")
 
-    # Controle de transfert : taux ajustes sur un mois, evalues sur l'autre.
-    # Ici les taux sont estimes sur les 10 mois d'entrainement, donc on
-    # verifie seulement que le gain est present sur CHACUN des deux mois.
-    print("\nGain par mois de validation :")
+    # Transfer check: rates fitted on one month, evaluated on the other.
+    # Here the rates are estimated on the 10 training months, so we
+    # only check that the gain is present in EACH of the two months.
+    print("\nGain per validation month:")
     month = va_all["month"].values
     gains = []
     for mo in VAL_MONTHS:
         mm = month == mo
         rb, ra = rmse(final_val[mm], y_va[mm]), rmse(final_rome[mm], y_va[mm])
         gains.append(rb - ra)
-        print(f"  mois {mo} : {rb:.1f} -> {ra:.1f} s  (gain {rb - ra:+.1f} s, "
-              f"{(m_rome & mm).sum()} vols concernes)")
+        print(f"  month {mo}: {rb:.1f} -> {ra:.1f} s  (gain {rb - ra:+.1f} s, "
+              f"{(m_rome & mm).sum()} flights concerned)")
     use_rome_local = all(g > -1.0 for g in gains) and (rmse_before - rmse_after) > 0
-    print("\nBranche Rome : gain local", "OUI" if use_rome_local else "NON",
-          "| DESACTIVEE en production (v16) : +19.8 s local, -2.45 s public "
-          "(v10 337.95 sans, v11 340.40 avec). La composition du sous-ensemble "
-          "a change en 2026.")
+    print("\nRome branch: local gain", "YES" if use_rome_local else "NO",
+          "| DISABLED in production (v16): +19.8 s local, -2.45 s public "
+          "(v10 337.95 without, v11 340.40 with). The composition of the subset "
+          "changed in 2026.")
     use_rome = False
 
-    # ---- v16 : recalibrage du poids du melange ----------------------------
-    # Le melange s'ecrit y = n + w * (s - n). Avec p calibre, l'optimum L2 est
-    # w = p ; l'exposant gamma n'est qu'une recalibration uniforme. Or le
-    # cout d'une erreur sur w est proportionnel a (s - n)^2, ce que la
-    # log-loss du classifieur ignore. On recalibre donc w = f(p, log(s - n))
-    # avec un modele volontairement petit, monotone en p, sans aeroport
-    # (verifie : le gain ne vient pas d'une memorisation par aeroport).
-    # Transfert janvier <-> juillet sur val_preds_v15 : +7.6 / +1.3 s.
-    # Entraine sur la validation complete (predictions de modeles a 10 mois),
-    # applique au ranking.
+    # ---- v16: recalibration of the mixture weight ----------------------------
+    # The mixture reads y = n + w * (s - n). With a calibrated p, the L2 optimum is
+    # w = p; the exponent gamma is only a uniform recalibration. But the
+    # cost of an error on w is proportional to (s - n)^2, which the
+    # log-loss of the classifier ignores. We therefore recalibrate w = f(p, log(s - n))
+    # with a deliberately small model, monotone in p, without airport
+    # (checked: the gain does not come from memorizing airports).
+    # Transfer January <-> July on val_preds_v15: +7.6 / +1.3 s.
+    # Trained on the full validation set (predictions of 10-month models),
+    # applied to the ranking file.
     print("\n" + "=" * 68)
-    print("RECALIBRAGE DU MELANGE w = f(p, log(s - n))")
+    print("MIXTURE RECALIBRATION w = f(p, log(s - n))")
     print("=" * 68)
     gap_va = sched - mu_normal
     Xcal = pd.DataFrame({"p_c": p_c,
@@ -1310,16 +1310,16 @@ def main_v16():
         w = np.where(ok[tem], cal.predict(Xcal[tem]), 0.0)
         pred_cal = np.maximum(mu_normal[tem] + w * (sched_safe[tem] - mu_normal[tem]),
                               TAXI_MIN_S)
-        print(f"  ajuste sur mois {fit_m}, teste sur mois {test_m} : "
+        print(f"  fitted on month {fit_m}, tested on month {test_m}: "
               f"{rmse(ref_val[tem], y_va[tem]):.1f} -> {rmse(pred_cal, y_va[tem]):.1f} s")
     calibrator = lgb.train(CAL_PARAMS, lgb.Dataset(Xcal, y_corr),
                            num_boost_round=CAL_ROUNDS)
     w_all = np.where(ok, calibrator.predict(Xcal), 0.0)
     final_val = np.maximum(mu_normal + w_all * (sched_safe - mu_normal), TAXI_MIN_S)
-    print(f"  (en echantillon, indicatif) reference {rmse(ref_val, y_va):.1f} s, "
-          f"recalibre {rmse(final_val, y_va):.1f} s")
+    print(f"  (in-sample, indicative) reference {rmse(ref_val, y_va):.1f} s, "
+          f"recalibrated {rmse(final_val, y_va):.1f} s")
 
-    # Sauvegarde des predictions de validation pour decomposition du MSE
+    # Save the validation predictions for the MSE breakdown
     pd.DataFrame({
         "MVT_ID_mvt": va_all["MVT_ID_mvt"].values,
         "ADEP_mvt": va_all["ADEP_mvt"].astype(str).values,
@@ -1328,9 +1328,9 @@ def main_v16():
         "p_c": p_c, "mu_normal": mu_normal, "delta_sched": sched,
         "is_corrupt": va_all[CORRUPT].values, "rome_branch": m_rome.astype(int),
     }).to_parquet(DATA_DIR / "val_preds_v15.parquet", index=False)
-    print(f"Predictions de validation sauvees : val_preds_v15.parquet")
+    print(f"Validation predictions saved: val_preds_v15.parquet")
 
-    print("\nRMSE par aeroport (v14 entre parentheses) :")
+    print("\nRMSE per airport (v14 in parentheses):")
     ref = {"EDDF": 201.0, "EDDM": 191.4, "EGLL": 279.2, "EHAM": 197.8,
            "LEBL": 239.7, "LEMD": 186.8, "LFPG": 578.8, "LIRF": 713.5,
            "LSZH": 214.1, "LTFM": 265.4}
@@ -1341,11 +1341,11 @@ def main_v16():
         print(f"  {a} : {r:8.1f} s  ({ref.get(a, float('nan')):6.1f})  "
               f"{r - ref.get(a, r):+7.1f}")
 
-    # ---- Reentrainement sur tout 2025 --------------------------------------
+    # ---- Retraining on all of 2025 ------------------------------------------
     print("\n" + "=" * 68)
-    print("Reentrainement sur l'ensemble de 2025")
+    print("Retraining on the whole of 2025")
     print("=" * 68)
-    print(f"Rounds figes par seed : classifieur {bestC}, regresseur A {iA}, B {iB}")
+    print(f"Rounds frozen per seed: classifier {bestC}, regressor A {iA}, B {iB}")
     dep_te = add_te_out_of_fold(dep, CORRUPT)
     maps_f, prior_f = fit_te_maps(dep_te, dep_te[CORRUPT].values)
     dep_te = add_unimpeded_out_of_fold(dep_te)
@@ -1361,20 +1361,20 @@ def main_v16():
     rank_path = DATA_DIR / "ranking.parquet"
     subm_path = DATA_DIR / "submitting.parquet"
     if not rank_path.exists() or not subm_path.exists():
-        print("\nFichiers de ranking introuvables : soumission ignoree.")
+        print("\nRanking files not found: submission skipped.")
         return
 
-    print("\nChargement du ranking dataset...")
+    print("\nLoading the ranking dataset...")
     rank = pd.read_parquet(rank_path)
-    print("Calcul des features (ranking)...")
+    print("Computing features (ranking)...")
     rdep = build_all(rank)
     rdep = apply_te(rdep, maps_f, prior_f)
     rdep = apply_unimpeded(rdep, umaps_f)
     lvr = rdep["unimpeded_level"]
-    print(f"Ranking, niveau non entrave : poste-piste {(lvr == 0).mean():.1%}, "
-          f"piste {(lvr == 1).mean():.1%}, aeroport {(lvr == 2).mean():.1%}")
-    print(f"Ranking : {len(rdep):,} departs | appariement poste "
-          f"{rdep['has_stand_link'].mean():.1%} | contexte arrivees "
+    print(f"Ranking, unimpeded level: stand-runway {(lvr == 0).mean():.1%}, "
+          f"runway {(lvr == 1).mean():.1%}, airport {(lvr == 2).mean():.1%}")
+    print(f"Ranking: {len(rdep):,} departures | stand matching "
+          f"{rdep['has_stand_link'].mean():.1%} | arrival context "
           f"{rdep['arr_taxi_mean_win'].notna().mean():.1%}")
 
     p_c_r = clf_c_f.predict(prepare_matrix(rdep, catsC_f, extra=TE_FEATURES + UNIMP_FEATURES))
@@ -1382,14 +1382,14 @@ def main_v16():
     ok_r = np.isfinite(sched_r)
     sched_r_safe = np.where(ok_r, sched_r, 0.0)
     mu_r = predict_normal(rdep, cA_f, cB_f, mA_f, mB_f)
-    print(f"P(corrompue) moyenne : {p_c_r.mean():.2%}")
+    print(f"Mean P(corrupted): {p_c_r.mean():.2%}")
 
     subm_tpl = pd.read_parquet(subm_path).drop(columns=[TARGET], errors="ignore")
-    print("\nSoumissions :")
-    # Deux fichiers par gamma : SANS et AVEC branche Rome. Le score public
-    # de v7 (341.3) n'a repris que 6 s des 31 s gagnees en local depuis
-    # v3 : quelque chose ne se transpose pas a 2026. Soumettre les deux
-    # variantes isole l'effet de la branche Rome au leaderboard.
+    print("\nSubmissions:")
+    # Two files per gamma: WITHOUT and WITH the Rome branch. The public score
+    # of v7 (341.3) only recovered 6 s of the 31 s gained locally since
+    # v3: something does not transfer to 2026. Submitting both
+    # variants isolates the effect of the Rome branch on the leaderboard.
     n_written = 0
     for i, g in enumerate(GAMMAS):
         pg = np.where(ok_r, p_c_r ** g, 0.0)
@@ -1400,17 +1400,17 @@ def main_v16():
                                "log_gap": np.sign(gap_r) * np.log1p(np.abs(gap_r))})
         w_r = np.where(ok_r, calibrator.predict(Xcal_r), 0.0)
         preds_cal = np.maximum(mu_r + w_r * (sched_r_safe - mu_r), TAXI_MIN_S)
-        print(f"  poids recalibre sur le ranking : moyenne {w_r.mean():.3f} "
-              f"(p^gamma moyen {pg.mean():.3f})")
+        print(f"  recalibrated weight on the ranking set: mean {w_r.mean():.3f} "
+              f"(mean p^gamma {pg.mean():.3f})")
 
-        variants = [("refGamma", preds_g), ("recalibre", preds_cal)]
+        variants = [("refGamma", preds_g), ("recalibrated", preds_cal)]
 
         for tag, pv in variants:
             s = subm_tpl.merge(
                 pd.DataFrame({"MVT_ID_mvt": rdep["MVT_ID_mvt"].values, "pred": pv}),
                 on="MVT_ID_mvt", how="left")
             if s["pred"].isna().any():
-                print(f"  Attention : {s['pred'].isna().sum()} sans prediction.")
+                print(f"  Warning: {s['pred'].isna().sum()} without prediction.")
                 s["pred"] = s["pred"].fillna(float(np.median(dep[TARGET])))
             s[TARGET] = s["pred"]
             s = s[["MVT_ID_mvt", TARGET]]
@@ -1418,15 +1418,15 @@ def main_v16():
             n_written += 1
             s.to_parquet(OUT_DIR / name, index=False)
             print(f"  {name:38s} {tag:10s} "
-                  f"mediane {np.median(pv):5.0f} s  "
-                  f"moyenne {pv.mean():5.0f} s  max {pv.max():7.0f} s")
+                  f"median {np.median(pv):5.0f} s  "
+                  f"mean {pv.mean():5.0f} s  max {pv.max():7.0f} s")
             print(f"    .\\mc.exe cp submissions\\{name} dc26/prc-2026-{TEAM}/")
 
 
 
 
 # ----------------------------------------------------------------------------
-# v19 : file de demande et sequence de decollage
+# v19: demand queue and takeoff sequence
 # ----------------------------------------------------------------------------
 
 DEMAND_NUM = ["q_sched_apt", "q_sched_rwy", "q_eobt_apt", "q_eobt_rwy",
@@ -1438,9 +1438,9 @@ USE_DEMAND = True
 
 
 def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
-    """File de demande et sequence de decollage, sans dependance a l'AOBT
-    du vol lui-meme. A appeler sur le tableau DEP + ARR, avant le filtrage
-    sur les departs."""
+    """Demand queue and takeoff sequence, without depending on the flight's own
+    AOBT. To be called on the DEP + ARR table, before filtering
+    on departures."""
     n = len(df)
     out = {k: np.full(n, np.nan) for k in
            ("q_sched_apt", "q_sched_rwy", "q_eobt_apt", "q_eobt_rwy",
@@ -1454,9 +1454,9 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
     is_dep = (df["PHASE_mvt"].values == "DEP")
 
     def secs(col):
-        """Serie datetime -> secondes. On force l'unite en nanosecondes avant
-        la conversion en entier : les parquet du challenge sont en
-        microsecondes, et diviser par 1e9 sans cela donne un facteur 1000."""
+        """Datetime series -> seconds. The unit is forced to nanoseconds before
+        the integer conversion: the challenge parquet files are in
+        microseconds, and dividing by 1e9 without this gives a factor of 1000."""
         if col not in df.columns:
             return np.full(n, np.nan)
         v = pd.to_datetime(df[col], errors="coerce", utc=True)
@@ -1474,11 +1474,11 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
     wake = (df["WK_TBL_CAT_flt"].astype(str).values
             if "WK_TBL_CAT_flt" in df.columns else np.full(n, "NA", dtype=object))
 
-    # Partitions (aeroport, mois) : le fichier de ranking ne contient que
-    # janvier et juillet isolement, alors que l'entrainement est continu. Un
-    # comptage a cheval sur les bords de mois serait donc tronque d'un cote et
-    # pas de l'autre, ce qui decale la distribution entre 2025 et 2026.
-    # Partitionner des deux cotes egalise ce biais.
+    # (airport, month) partitions: the ranking file only contains
+    # January and July in isolation, whereas training is continuous. A
+    # count straddling month boundaries would thus be truncated on one side and
+    # not on the other, which shifts the distribution between 2025 and 2026.
+    # Partitioning on both sides evens out this bias.
     ym = pd.to_datetime(df["MVT_TIME_UTC_mvt"], errors="coerce", utc=True)
     part = (airport.astype(object) + "|"
             + ym.dt.year.astype("Int64").astype(str) + "-"
@@ -1528,7 +1528,7 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
             gaps = np.diff(dr)
             prev = np.searchsorted(dr, ts, side="left") - 1
 
-            # moyenne des cinq derniers intervalles
+            # mean of the last five intervals
             csum = np.concatenate([[0.0], np.cumsum(gaps)])
             lo = np.maximum(prev - 5, 0)
             cnt = prev - lo
@@ -1537,7 +1537,7 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
             g5[ok] = (csum[prev[ok]] - csum[lo[ok]]) / cnt[ok]
             out["rwy_gap_mean5_s"][sub] = g5
 
-            # longueur de rafale
+            # burst length
             burst = np.zeros(dr.size)
             for i in range(1, dr.size):
                 burst[i] = burst[i - 1] + 1 if gaps[i - 1] < 120 else 0.0
@@ -1546,7 +1546,7 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
             b[has] = burst[prev[has]]
             out["rwy_burst_pos"][sub] = b
 
-            # couple de sillage avec le decollage precedent
+            # wake pair with the previous takeoff
             pw = np.full(ts.shape, "NA", dtype=object)
             pw[has] = wake[d_sub][prev[has]]
             wake_pair[sub] = np.char.add(np.char.add(pw.astype(str), ">"),
@@ -1559,19 +1559,19 @@ def add_demand_queue_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------
-# v19 : detection de journee degradee (degivrage, LVP, incident de surface)
+# v19: degraded-day detection (de-icing, LVP, surface incident)
 # ----------------------------------------------------------------------------
 #
-# Le taxi-in des arrivees n'est PAS masque dans le fichier de ranking : on
-# dispose donc, pour janvier et juillet 2026, de l'etat reel de la surface
-# heure par heure. Ce qui manque a v16, ce n'est pas la valeur absolue du
-# taxi-in recent (arr_taxi_mean_win la donne deja) mais son RAPPORT A LA
-# NORME : un taxi-in moyen de 700 s est banal a CDG a 9 h et signale une
-# journee degradee a 5 h du matin.
+# The arrivals' taxi-in is NOT masked in the ranking file: we
+# therefore have, for January and July 2026, the actual state of the surface
+# hour by hour. What v16 lacks is not the absolute value of the
+# recent taxi-in (arr_taxi_mean_win already gives it) but its RATIO TO THE
+# NORM: a mean taxi-in of 700 s is ordinary at CDG at 9 am and signals a
+# degraded day at 5 am.
 #
-# La norme est calculee par (aeroport, mois, heure) avec une mediane, donc
-# robuste a quelques journees exceptionnelles, et dans la meme partition des
-# deux cotes pour eviter le probleme de bord de mois.
+# The norm is computed per (airport, month, hour) with a median, hence
+# robust to a few exceptional days, and within the same partition on
+# both sides to avoid the month-boundary problem.
 
 DEGRADED_NUM = ["arr_taxi_norm_h", "arr_taxi_ratio_1h",
                 "arr_taxi_ratio_3h", "arr_taxi_ratio_6h"]
@@ -1579,8 +1579,8 @@ USE_DEGRADED = False
 
 
 def add_degraded_day_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Rapport du taxi-in recent des arrivees a sa norme horaire. Causal :
-    seules les arrivees anterieures a l'instant considere sont utilisees."""
+    """Ratio of the arrivals' recent taxi-in to its hourly norm. Causal:
+    only arrivals before the time considered are used."""
     n = len(df)
     out = {k: np.full(n, np.nan) for k in DEGRADED_NUM}
 
@@ -1631,13 +1631,13 @@ def add_degraded_day_features(df: pd.DataFrame) -> pd.DataFrame:
         if a_idx.size < 50:
             continue
 
-        # norme horaire, mediane robuste sur la partition
+        # hourly norm, robust median over the partition
         norm = (pd.DataFrame({"h": hour[a_idx], "v": taxi[a_idx]})
                 .groupby("h")["v"].median())
         base = pd.Series(hour[idx]).map(norm).to_numpy(dtype=float)
         out["arr_taxi_norm_h"][idx] = base
 
-        # le taxi-in d'une arrivee est connu a son heure de mise en bloc
+        # the taxi-in of an arrival is known at its in-block time
         ev_t = np.where(np.isfinite(t_block[a_idx]), t_block[a_idx], t[a_idx])
         ev_v = taxi[a_idx]
         for win, name in ((3600.0, "arr_taxi_ratio_1h"),
@@ -1657,49 +1657,49 @@ NUM_FEATURES = NUM_FEATURES + DEGRADED_NUM
 
 
 # ----------------------------------------------------------------------------
-# v19 : contexte posterieur dense (features non causales)
+# v19: dense posterior context (non-causal features)
 # ----------------------------------------------------------------------------
 #
-# La tache est une reconstruction retrospective : le fichier de ranking
-# contient tous les mouvements de janvier et juillet 2026, y compris ceux
-# qui decollent apres la ligne cible. Les decollages suivants, et surtout
-# leurs heures d'off-block NM, renseignent directement sur la file dans
-# laquelle le vol se trouvait.
+# The task is a retrospective reconstruction: the ranking file
+# contains all the movements of January and July 2026, including those
+# taking off after the target row. The following takeoffs, and above all
+# their NM off-block times, directly inform on the queue in
+# which the flight was.
 #
-# Aucune de ces colonnes n'utilise BLOCK_TIME_UTC_mvt ni TAXITIME_SEC_mvt
-# des departs, qui sont masques au ranking.
+# None of these columns uses BLOCK_TIME_UTC_mvt or TAXITIME_SEC_mvt
+# of departures, which are masked in the ranking file.
 #
-# Ces features n'ont aucun sens operationnel : un controleur ne connait pas
-# les decollages futurs. A signaler explicitement dans toute publication.
+# These features have no operational meaning: a controller does not know
+# future takeoffs. To be stated explicitly in any publication.
 
 FOLLOWING_NUM = [
-    # intervalles vers les decollages suivants sur la piste
+    # intervals to the following takeoffs on the runway
     "gap_next_1_rwy", "gap_next_2_rwy", "gap_next_3_rwy",
     "gap_next_5_rwy", "gap_next_10_rwy", "gap_next_20_rwy",
     "rate_next_5_rwy", "rate_next_10_rwy", "rate_next_20_rwy",
-    # densite a venir, par piste et par aeroport
+    # upcoming density, per runway and per airport
     "dep_ahead_5_rwy", "dep_ahead_15_rwy", "dep_ahead_30_rwy", "dep_ahead_60_rwy",
     "dep_ahead_5_apt", "dep_ahead_15_apt", "dep_ahead_30_apt", "dep_ahead_60_apt",
-    # densite symetrique : la file autour du vol
+    # symmetric density: the queue around the flight
     "dep_sym_15_rwy", "dep_sym_30_rwy", "dep_sym_30_apt",
     "ahead_share_15_rwy", "ahead_share_30_apt",
     # rafales
     "burst_ahead_rwy", "pos_in_burst_rwy", "burst_len_rwy",
     "burst_time_ahead_rwy", "burst_time_since_rwy", "burst_share_done",
-    # symetrie et regime de la piste
+    # symmetry and regime of the runway
     "gap_ratio_next_prev", "rate_ahead_vs_norm_rwy", "gap_next_vs_norm_rwy",
-    # horloges NM des vols suivants : qui roulait deja derriere moi
+    # NM clocks of the following flights: who was already taxiing behind me
     "next_aobt_minus_t", "next_eobt_minus_t",
     "n_behind_taxiing_5", "n_behind_taxiing_10", "behind_aobt_mean_5",
     "next_sched_slack", "next_slack_mean_5",
-    # composition du flux a venir
+    # composition of the upcoming flow
     "n_heavy_next_5", "next_same_operator", "rwy_switch_next",
 ]
 USE_FOLLOWING = False
 
 
 def add_following_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Contexte des decollages posterieurs, par (aeroport, mois, piste)."""
+    """Context of the later takeoffs, per (airport, month, runway)."""
     n = len(df)
     out = {k: np.full(n, np.nan) for k in FOLLOWING_NUM}
 
@@ -1783,7 +1783,7 @@ def add_following_features(df: pd.DataFrame) -> pd.DataFrame:
             gaps = np.diff(dr)
 
             def _pick(arr, k, default=np.nan):
-                """valeur du k-ieme decollage suivant, NaN au dela de la fin"""
+                """value of the k-th following takeoff, NaN beyond the end"""
                 v = np.full(ts_sub.shape, default, dtype=float)
                 j = prev + k
                 ok = has & (j < m) & (j >= 0)
@@ -1811,7 +1811,7 @@ def add_following_features(df: pd.DataFrame) -> pd.DataFrame:
                     out["dep_sym_15_rwy"][sub] > 0,
                     out["dep_ahead_15_rwy"][sub] / out["dep_sym_15_rwy"][sub], np.nan)
 
-            # rafales : suites de decollages espaces de moins de deux minutes
+            # bursts: sequences of takeoffs less than two minutes apart
             tight = gaps < 120
             start = np.zeros(m, dtype=np.int64)
             for i in range(1, m):
@@ -1844,7 +1844,7 @@ def add_following_features(df: pd.DataFrame) -> pd.DataFrame:
                 out["gap_ratio_next_prev"][sub] = np.where(
                     np.isfinite(gp) & (gp > 0), out["gap_next_1_rwy"][sub] / gp, np.nan)
 
-            # regime de la piste rapporte a sa norme sur la partition
+            # runway regime relative to its norm over the partition
             norm_gap = float(np.nanmedian(gaps)) if gaps.size else np.nan
             norm_ahead = float(np.nanmedian(out["dep_ahead_15_rwy"][sub]))
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -1854,13 +1854,13 @@ def add_following_features(df: pd.DataFrame) -> pd.DataFrame:
                     out["rate_ahead_vs_norm_rwy"][sub] = (
                         out["dep_ahead_15_rwy"][sub] / norm_ahead)
 
-            # horloges NM des vols suivants
+            # NM clocks of the following flights
             out["next_aobt_minus_t"][sub] = _pick(a_sorted, 1) - ts_sub
             out["next_eobt_minus_t"][sub] = _pick(e_sorted, 1) - ts_sub
             out["next_sched_slack"][sub] = _pick(dr, 1) - _pick(s_sorted, 1)
 
-            # combien des vols suivants avaient DEJA repousse quand j'ai decolle :
-            # ils roulaient donc derriere moi, c'est la file elle-meme
+            # how many of the following flights had ALREADY pushed back when I took off:
+            # they were therefore taxiing behind me, this is the queue itself
             cnt5 = np.zeros(ts_sub.shape)
             cnt10 = np.zeros(ts_sub.shape)
             acc = np.zeros(ts_sub.shape)
@@ -1913,37 +1913,37 @@ NUM_FEATURES = NUM_FEATURES + FOLLOWING_NUM
 
 
 # ----------------------------------------------------------------------------
-# v19 : contexte des voisins, de l'aeroport entier et des arrivees
+# v19: context of the neighbors, of the whole airport and of the arrivals
 # ----------------------------------------------------------------------------
 #
-# Trois familles, toutes bidirectionnelles (passe et futur), dans la lignee
-# du contexte posterieur :
+# Three families, all bidirectional (past and future), in line with
+# the posterior context:
 #
-#   1. Voisinage de poste : le taxi-out depend de qui encombre la meme
-#      bretelle. Le prefixe de STAND_mvt sert d'approximation du satellite
-#      ou de la jetee (C03 et C07 sont voisins, 826 et 828 aussi).
-#   2. Aeroport entier plutot que piste : les vagues de depart traversent
-#      les pistes, et un vol peut etre retarde par une file qui n'est pas
-#      la sienne.
-#   3. Arrivees a venir : un avion qui se pose pendant que vous roulez peut
-#      couper votre itineraire, surtout en mode mixte.
+#   1. Stand neighborhood: the taxi-out depends on who clutters the same
+#      taxiway. The prefix of STAND_mvt approximates the satellite
+#      or pier (C03 and C07 are neighbors, 826 and 828 too).
+#   2. Whole airport rather than runway: departure waves cross
+#      runways, and a flight can be delayed by a queue that is not
+#      its own.
+#   3. Upcoming arrivals: an aircraft landing while you taxi can
+#      cross your route, especially in mixed mode.
 #
-# Aucune colonne masquee n'est utilisee.
+# No masked column is used.
 
 NEIGHBOR_NUM = [
-    # voisinage de poste
+    # stand neighborhood
     "stand_zone_sym_15", "stand_zone_sym_30", "stand_zone_ahead_15",
     "stand_zone_gap_prev", "stand_zone_gap_next", "stand_zone_share_ahead",
     "same_stand_gap_prev", "same_stand_gap_next",
     "stand_zone_arr_sym_30", "stand_zone_load",
-    # aeroport entier
+    # whole airport
     "gap_next_1_apt", "gap_next_5_apt", "gap_next_10_apt", "gap_next_20_apt",
     "rate_next_5_apt", "rate_next_10_apt", "rate_next_20_apt",
     "gap_prev_1_apt", "gap_ratio_next_prev_apt",
     "burst_len_apt", "pos_in_burst_apt", "burst_ahead_apt",
     "n_behind_taxiing_5_apt", "n_behind_taxiing_10_apt",
     "rate_ahead_vs_norm_apt",
-    # arrivees
+    # arrivals
     "arr_ahead_15_apt", "arr_ahead_30_apt", "arr_sym_30_apt",
     "arr_ahead_15_rwy", "arr_sym_30_rwy",
     "arr_dep_ratio_ahead_30", "next_arr_gap_rwy", "next_arr_gap_apt",
@@ -1966,7 +1966,7 @@ def _nb_secs(df, col, n):
 
 
 def _burst_arrays(arr, tight_s=120.0):
-    """debut, fin, longueur de chaque rafale pour une suite d'heures triees"""
+    """start, end, length of each burst for a sorted sequence of times"""
     m = arr.size
     if m == 0:
         return (np.zeros(0, dtype=np.int64),) * 2 + (np.zeros(0),) * 3
@@ -1983,7 +1983,7 @@ def _burst_arrays(arr, tight_s=120.0):
 
 
 def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Voisinage de poste, contexte aeroport et contexte des arrivees."""
+    """Stand neighborhood, airport context and arrival context."""
     n = len(df)
     out = {k: np.full(n, np.nan) for k in NEIGHBOR_NUM}
 
@@ -2016,7 +2016,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
         if d_idx.size < 3:
             continue
 
-        # --- aeroport entier -------------------------------------------------
+        # --- whole airport ---------------------------------------------------
         order = np.argsort(t[d_idx])
         d_sorted = d_idx[order]
         dr = t[d_sorted]
@@ -2072,7 +2072,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
         if np.isfinite(norm) and norm > 0:
             out["rate_ahead_vs_norm_apt"][idx] = ahead15 / norm
 
-        # --- arrivees --------------------------------------------------------
+        # --- arrivals --------------------------------------------------------
         if a_idx.size:
             ar = np.sort(t[a_idx])
             nxt_a = np.searchsorted(ar, tt, side="right")
@@ -2091,7 +2091,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
             with np.errstate(invalid="ignore", divide="ignore"):
                 out["arr_dep_ratio_ahead_30"][idx] = np.where(
                     dep_ahead30 > 0, out["arr_ahead_30_apt"][idx] / dep_ahead30, np.nan)
-            # mises en bloc a venir : les arrivees qui liberent ou occupent la surface
+            # upcoming in-blocks: arrivals that free or occupy the surface
             ab = t_block[a_idx]
             ab = np.sort(ab[np.isfinite(ab)])
             if ab.size:
@@ -2099,7 +2099,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
                     np.searchsorted(ab, tt + 1800, side="right")
                     - np.searchsorted(ab, tt, side="left")).astype(float)
 
-        # --- par piste : arrivees croisant l'itineraire -----------------------
+        # --- per runway: arrivals crossing the route -------------------------
         for r in pd.unique(rwy[idx]):
             sub = idx[rwy[idx] == r]
             ts_sub = t[sub]
@@ -2116,7 +2116,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
                 g[ok] = ar_r[k0[ok]] - ts_sub[ok]
                 out["next_arr_gap_rwy"][sub] = g
 
-        # --- voisinage de poste ----------------------------------------------
+        # --- stand neighborhood ----------------------------------------------
         for z in pd.unique(zone[idx]):
             sub = idx[zone[idx] == z]
             if sub.size < 3:
@@ -2145,7 +2145,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
                 okp2 = (k0 - 1) >= 1
                 gprev[okp2] = ts_sub[okp2] - dz[k0[okp2] - 2]
                 out["stand_zone_gap_prev"][sub] = gprev
-                # charge de la zone rapportee a sa norme sur la partition
+                # load of the area relative to its norm over the partition
                 nz = float(np.nanmedian(sym15))
                 if np.isfinite(nz) and nz > 0:
                     out["stand_zone_load"][sub] = sym15 / nz
@@ -2154,7 +2154,7 @@ def add_neighbor_features(df: pd.DataFrame) -> pd.DataFrame:
                     np.searchsorted(az, ts_sub + 1800, side="right")
                     - np.searchsorted(az, ts_sub - 1800, side="left")).astype(float)
 
-        # --- meme poste exactement : rotation ---------------------------------
+        # --- exactly the same stand: rotation ---------------------------------
         for st in pd.unique(stand[idx]):
             sub = idx[stand[idx] == st]
             if sub.size < 2:
@@ -2180,13 +2180,13 @@ NUM_FEATURES = NUM_FEATURES + NEIGHBOR_NUM
 
 
 # ----------------------------------------------------------------------------
-# v19 : modeles par aeroport et ensemble CatBoost
+# v19: per-airport models and CatBoost ensemble
 # ----------------------------------------------------------------------------
 
 USE_PER_AIRPORT = False
 CLF_GLOBAL = False
 USE_CATBOOST = False
-PER_AIRPORT_MIN = 40000     # lignes minimales pour meriter son propre modele
+PER_AIRPORT_MIN = 40000     # minimum number of rows to deserve a dedicated model
 CAT_ROUNDS_A = 1200
 CAT_ROUNDS_B = 300
 CAT_WEIGHT = 0.5
@@ -2194,9 +2194,9 @@ PER_RUNWAY = False
 
 
 def train_cat(X, y, rounds, seed):
-    """CatBoost sur la meme matrice que LightGBM. Les colonnes categorielles
-    sont converties en chaines : CatBoost les traite nativement et son
-    encodage ordonne gere mieux les fortes cardinalites comme STAND_mvt."""
+    """CatBoost on the same matrix as LightGBM. Categorical columns
+    are converted to strings: CatBoost handles them natively and its
+    ordered encoding copes better with high cardinalities such as STAND_mvt."""
     from catboost import CatBoostRegressor, Pool
     Xc = X.copy()
     cats = [c for c in Xc.columns if str(Xc[c].dtype) == "category"]
@@ -2223,9 +2223,9 @@ def predict_cat(model_cats, X):
 
 
 def fit_stage1_grouped(train_df):
-    """Un modele par aeroport suffisamment represente, plus un modele de
-    repli pour les autres. Rome ne se comporte pas comme Munich, et un
-    modele unique arbitre entre les deux au lieu de les servir."""
+    """One model per sufficiently represented airport, plus a fallback
+    model for the others. Rome does not behave like Munich, and a
+    single model compromises between the two instead of serving both."""
     if not USE_PER_AIRPORT:
         return {"__global__": fit_stage1(train_df)}
     key = train_df["ADEP_mvt"].astype(str)
@@ -2235,7 +2235,7 @@ def fit_stage1_grouped(train_df):
     counts = key.value_counts()
     big = [a for a, c in counts.items() if c >= PER_AIRPORT_MIN]
     models = {}
-    print("    modeles par aeroport : %d dedies, 1 de repli" % len(big))
+    print("    per-airport models: %d dedicated, 1 fallback" % len(big))
     for a in big:
         part = train_df[train_df["_grp"] == a]
         models[a] = fit_stage1(part)
@@ -2244,12 +2244,12 @@ def fit_stage1_grouped(train_df):
 
 
 def predict_stage1_grouped(models, df):
-    """Regresseurs par aeroport, classifieur au choix.
+    """Per-airport regressors, classifier of choice.
 
-    Un classifieur dedie a Rome voit ses cinquante labels corrompus en
-    proportion bien plus forte que le classifieur global, qui les noie dans
-    1,7 million de lignes, et il les surapprend. CLF_GLOBAL garde donc le
-    p_c du modele global tout en prenant le mu du modele local.
+    A classifier dedicated to Rome sees its fifty corrupted labels in a
+    much higher proportion than the global classifier, which drowns them in
+    1.7 million rows, and it overfits them. CLF_GLOBAL therefore keeps the
+    p_c of the global model while taking the mu of the local model.
     """
     if "__global__" in models and len(models) == 1:
         return predict_stage1(models["__global__"], df)
@@ -2281,14 +2281,14 @@ def predict_stage1_grouped(models, df):
 
 
 # ----------------------------------------------------------------------------
-# v19 : classifieur de corruption allege
+# v19: lean corruption classifier
 # ----------------------------------------------------------------------------
 #
-# Deux essais independants ont montre que l'ajout de features de contexte
-# ameliore la voie propre mais degrade Rome une fois les labels corrompus
-# inclus : le classifieur p_c dispose de plus en plus de matiere pour
-# justifier des predictions elevees a tort. On lui retire donc tout le
-# contexte, que les regresseurs continuent d'utiliser pleinement.
+# Two independent trials showed that adding context features
+# improves the clean lane but degrades Rome once the corrupted labels are
+# included: the p_c classifier gets more and more material to
+# wrongly justify high predictions. All the context is therefore removed
+# from it, while the regressors keep using it fully.
 
 CLF_DROP = set(DEMAND_NUM + DEMAND_CAT + DEGRADED_NUM + FOLLOWING_NUM + NEIGHBOR_NUM)
 CLF_LEAN = False
@@ -2306,14 +2306,14 @@ def prepare_matrix_clf(df, train_categories=None, extra=()):
 # ---- Configuration -----------------------------------------------------------
 SEED = 42
 GAMMA = 0.75
-FOLDS = [[2, 3], [4, 5], [6, 8], [9, 10], [11, 12]]   # plis sur les mois de train
-INNER_HOLDOUT = 4                                       # indice du pli de selection (11-12)
+FOLDS = [[2, 3], [4, 5], [6, 8], [9, 10], [11, 12]]   # folds over the training months
+INNER_HOLDOUT = 4                                       # index of the selection fold (11-12)
 VAL_MONTHS = [1, 7]
 
-# Rounds figes du premier etage (valeurs typiques observees v13-v15)
+# Frozen rounds of the first stage (typical values observed in v13-v15)
 ROUNDS_CLF, ROUNDS_A, ROUNDS_B = 210, 580, 100
 
-# Correcteur
+# Corrector
 CLIP_RESID_S = 3600.0
 LAMBDAS = [0.0, 0.25, 0.5, 0.75, 1.0]
 LGB_CORR = dict(objective="huber", alpha=600.0, metric="rmse",
@@ -2326,11 +2326,11 @@ STAGE1_OUT = ["p_c", "mu_normal", "mu_raw", "mix", "gap", "log_gap"]
 TEAM_V17, START_V_V17 = "motivated-ostrich", 19
 
 
-# ---- Premier etage (version compacte, une seed, rounds figes) -------------
+# ---- First stage (compact version, one seed, frozen rounds) --------------
 
 def fit_stage1(train_df: pd.DataFrame) -> dict:
-    """Classifieur + regresseurs A/B, target encodings et temps non entrave,
-    tout ajuste sur train_df. Rounds figes (pas de validation interne)."""
+    """Classifier + regressors A/B, target encodings and unimpeded time,
+    all fitted on train_df. Frozen rounds (no internal validation)."""
     tr = add_te_out_of_fold(train_df, CORRUPT)
     maps, prior = fit_te_maps(tr, tr[CORRUPT].values)
     tr = add_unimpeded_out_of_fold(tr)
@@ -2360,8 +2360,8 @@ def fit_stage1(train_df: pd.DataFrame) -> dict:
 
 
 def predict_stage1(models: dict, df: pd.DataFrame) -> pd.DataFrame:
-    """Applique le premier etage a df (avec encodages de models). Retourne df
-    enrichi des sorties STAGE1_OUT."""
+    """Applies the first stage to df (with the encodings in models). Returns df
+    enriched with the STAGE1_OUT outputs."""
     d = apply_te(df, models["maps"], models["prior"])
     d = apply_unimpeded(d, models["umaps"])
     extra = TE_FEATURES + UNIMP_FEATURES
@@ -2425,11 +2425,11 @@ def _model_key(scope, seed, n_rows):
 
 
 def fit_stage1_cached(train_df, scope, seed):
-    """Reutilise un premier etage deja entraine pour la meme configuration.
+    """Reuses a first stage already trained for the same configuration.
 
-    La cle couvre la portee, la graine, le nombre de lignes, les capacites et
-    les drapeaux d'architecture, ainsi que le nombre de features : un cache
-    obsolete ne peut donc pas etre servi par erreur.
+    The key covers the scope, the seed, the number of rows, the capacities and
+    the architecture flags, as well as the number of features: an obsolete
+    cache can therefore not be served by mistake.
     """
     if not MODEL_CACHE:
         return fit_stage1_grouped(train_df)
@@ -2438,7 +2438,7 @@ def fit_stage1_cached(train_df, scope, seed):
     d.mkdir(exist_ok=True)
     f = d / ("stage1_%s.pkl" % _model_key(scope, seed, len(train_df)))
     if f.exists():
-        print("    modeles relus du cache (%s)" % f.name, flush=True)
+        print("    models reloaded from the cache (%s)" % f.name, flush=True)
         with open(f, "rb") as fh:
             return pickle.load(fh)
     mdl = fit_stage1_grouped(train_df)
@@ -2453,14 +2453,14 @@ def fit_stage1_cached(train_df, scope, seed):
 
 
 def fit_predict_seeds(train_df, target_df, label=""):
-    """Premier etage moyenne sur plusieurs graines, poids egaux."""
+    """First stage averaged over several seeds, equal weights."""
     global SEED
     seeds = SEED_LIST[:max(1, N_SEEDS)]
     mixes, first = [], None
     for k, sd in enumerate(seeds):
         SEED = sd
         if len(seeds) > 1:
-            print("    %s graine %d/%d (seed=%d)..." % (label, k + 1, len(seeds), sd),
+            print("    %s seed %d/%d (seed=%d)..." % (label, k + 1, len(seeds), sd),
                   flush=True)
         mdl = fit_stage1_cached(train_df, label, sd)
         out = predict_stage1_grouped(mdl, target_df)
@@ -2494,31 +2494,31 @@ def main_v17():
     train, val = dep[~is_val].copy(), dep[is_val].copy()
     print(f"Train {len(train):,} / val {len(val):,}")
 
-    # ---- 1. Predictions hors-fold sur le train --------------------------
+    # ---- 1. Out-of-fold predictions on the training set -------------------
     print("\n" + "=" * 68)
-    print("ETAPE 1 : predictions hors-fold du premier etage (5 plis, 1 seed)")
+    print("STEP 1: out-of-fold predictions of the first stage (5 folds, 1 seed)")
     print("=" * 68)
     oof_parts = []
     for k, months in enumerate(FOLDS):
         out = train["month"].isin(months)
-        print(f"  pli {k + 1}/5 : mois {months} predits par les autres "
-              f"({(~out).sum():,} lignes d'entrainement)...", flush=True)
+        print(f"  fold {k + 1}/5: months {months} predicted by the others "
+              f"({(~out).sum():,} training rows)...", flush=True)
         models = fit_stage1(train[~out])
         part = predict_stage1(models, train[out])
         part["_fold"] = k
         oof_parts.append(part)
         r = rmse(part["mix"].values, part[TARGET].values)
-        print(f"      RMSE melange hors-fold sur ce pli : {r:.1f} s")
+        print(f"      out-of-fold mixture RMSE on this fold: {r:.1f} s")
     oof = pd.concat(oof_parts)
     oof["resid"] = oof[TARGET].values - oof["mix"].values
-    print(f"\nRMSE melange hors-fold, 10 mois : {rmse(oof['mix'], oof[TARGET]):.1f} s")
-    print(f"Residu : median {oof['resid'].median():.0f} s, ecart-type "
-          f"{oof['resid'].std():.0f} s, part |resid| > {CLIP_RESID_S:.0f} : "
+    print(f"\nOut-of-fold mixture RMSE, 10 months: {rmse(oof['mix'], oof[TARGET]):.1f} s")
+    print(f"Residual: median {oof['resid'].median():.0f} s, std "
+          f"{oof['resid'].std():.0f} s, share |resid| > {CLIP_RESID_S:.0f}: "
           f"{(oof['resid'].abs() > CLIP_RESID_S).mean():.3%}")
 
-    # ---- 2. Correcteur : selection sur le pli interne -------------------
+    # ---- 2. Corrector: selection on the inner fold -----------------------
     print("\n" + "=" * 68)
-    print("ETAPE 2 : correcteur (Huber, residu ecrete), selection sur le pli 5")
+    print("STEP 2: corrector (Huber, clipped residual), selection on fold 5")
     print("=" * 68)
     inner = oof["_fold"].values == INNER_HOLDOUT
     y_res = np.clip(oof["resid"].values, -CLIP_RESID_S, CLIP_RESID_S)
@@ -2533,59 +2533,59 @@ def main_v17():
                      callbacks=[lgb.early_stopping(150, verbose=False),
                                 lgb.log_evaluation(300)])
     best_rounds = corr.best_iteration
-    print(f"Iterations retenues : {best_rounds}")
+    print(f"Iterations kept: {best_rounds}")
 
-    # Balayage de lambda sur le pli interne, sur le VRAI residu (non ecrete)
+    # Sweep of lambda on the inner fold, on the TRUE (unclipped) residual
     c_in = corr.predict(X_in, num_iteration=best_rounds)
     mix_in, y_in = oof.loc[inner, "mix"].values, oof.loc[inner, TARGET].values
     best_l, best_r = 0.0, np.inf
-    print("\n  lambda   RMSE pli 5")
+    print("\n  lambda   RMSE fold 5")
     for lam in LAMBDAS:
         r = rmse(np.maximum(mix_in + lam * c_in, TAXI_MIN_S), y_in)
         mark = ""
         if r < best_r:
             best_r, best_l, mark = r, lam, "  <--"
         print(f"  {lam:5.2f}   {r:8.1f} s{mark}")
-    print(f"\nConfiguration figee : lambda = {best_l}, {best_rounds} iterations")
+    print(f"\nFrozen configuration: lambda = {best_l}, {best_rounds} iterations")
     if best_l == 0.0:
-        print("  lambda = 0 : le correcteur n'apporte rien sur le pli interne.")
+        print("  lambda = 0: the corrector brings nothing on the inner fold.")
 
-    print("\nTop 15 features du correcteur (gain) :")
+    print("\nTop 15 corrector features (gain):")
     print(pd.Series(corr.feature_importance(importance_type="gain"),
                     index=X_fit.columns).sort_values(ascending=False).head(15).to_string())
 
-    # Correcteur final sur les 5 plis (rounds figes)
+    # Final corrector on the 5 folds (frozen rounds)
     corr_full = lgb.train(LGB_CORR, lgb.Dataset(align(X_all, cats_corr), label=y_res),
                           num_boost_round=best_rounds)
 
-    # ---- 3. Evaluation unique sur janvier + juillet ---------------------
+    # ---- 3. Single evaluation on January + July -------------------------
     print("\n" + "=" * 68)
-    print("ETAPE 3 : evaluation sur janvier + juillet 2025 (une seule fois)")
+    print("STEP 3: evaluation on January + July 2025 (only once)")
     print("=" * 68)
     v = fit_predict_seeds(train, val, label='evaluation')
     c_val = corr_full.predict(align(corrector_matrix(v), cats_corr))
     ref = v["mix"].values
     cor = np.maximum(ref + best_l * c_val, TAXI_MIN_S)
     y = v[TARGET].values
-    print(f"RMSE reference (melange p^{GAMMA}) : {rmse(ref, y):.1f} s")
-    print(f"RMSE corrige (lambda = {best_l})     : {rmse(cor, y):.1f} s   "
+    print(f"Reference RMSE (mixture p^{GAMMA}): {rmse(ref, y):.1f} s")
+    print(f"Corrected RMSE (lambda = {best_l})  : {rmse(cor, y):.1f} s   "
           f"gain {rmse(ref, y) - rmse(cor, y):+.1f} s")
     gains = []
     for mo in VAL_MONTHS:
         m = v["month"].values == mo
         g = rmse(ref[m], y[m]) - rmse(cor[m], y[m])
         gains.append(g)
-        print(f"  mois {mo} : {rmse(ref[m], y[m]):.1f} -> {rmse(cor[m], y[m]):.1f} s "
+        print(f"  month {mo}: {rmse(ref[m], y[m]):.1f} -> {rmse(cor[m], y[m]):.1f} s "
               f"(gain {g:+.1f})")
-    print("\nPar aeroport (reference -> corrige) :")
+    print("\nPer airport (reference -> corrected):")
     apt = v["ADEP_mvt"].astype(str).values
     for a in np.unique(apt):
         m = apt == a
         print(f"  {a} : {rmse(ref[m], y[m]):7.1f} -> {rmse(cor[m], y[m]):7.1f} s "
               f"({rmse(ref[m], y[m]) - rmse(cor[m], y[m]):+.1f})")
     transfers = all(g > 0 for g in gains)
-    print("\nGain positif sur les deux mois :", "OUI" if transfers else "NON",
-          "" if transfers else "(soumission corrigee ecrite quand meme, a lire avec prudence)")
+    print("\nPositive gain in both months:", "YES" if transfers else "NO",
+          "" if transfers else "(corrected submission written anyway, read with caution)")
 
     pd.DataFrame({"MVT_ID_mvt": v["MVT_ID_mvt"].values, "y": y, "ref": ref,
                   "corr": c_val, "final": cor, "month": v["month"].values,
@@ -2594,20 +2594,20 @@ def main_v17():
     # ---- 4. Ranking ------------------------------------------------------
     rank_path, subm_path = DATA_DIR / "ranking.parquet", DATA_DIR / "submitting.parquet"
     if not rank_path.exists():
-        print("\nranking.parquet introuvable : soumission ignoree.")
+        print("\nranking.parquet not found: submission skipped.")
         return
     print("\n" + "=" * 68)
-    print("ETAPE 4 : ranking (premier etage sur 12 mois, correcteur tel quel)")
+    print("STEP 4: ranking (first stage on 12 months, corrector as is)")
     print("=" * 68)
-    # premier etage sur 12 mois, moyenne de graines
+    # first stage on 12 months, mean over seeds
     rank = pd.read_parquet(rank_path)
     rdep = build_all(rank)
     r = fit_predict_seeds(dep, rdep, label='ranking')
     c_r = corr_full.predict(align(corrector_matrix(r), cats_corr))
     ref_r = r["mix"].values
     cor_r = np.maximum(ref_r + best_l * c_r, TAXI_MIN_S)
-    print(f"Correction sur le ranking : moyenne {c_r.mean():+.0f} s, "
-          f"|c| > 600 s sur {(np.abs(c_r) > 600).mean():.2%} des lignes")
+    print(f"Correction on the ranking set: mean {c_r.mean():+.0f} s, "
+          f"|c| > 600 s on {(np.abs(c_r) > 600).mean():.2%} of the rows")
 
     subm_tpl = pd.read_parquet(subm_path).drop(columns=[TARGET], errors="ignore")
     for j, (tag, pv) in enumerate([("ref", ref_r), (f"corr_l{best_l}", cor_r)]):
@@ -2619,16 +2619,16 @@ def main_v17():
         s = s[["MVT_ID_mvt", TARGET]]
         name = f"{TEAM_V17}_v{START_V_V17 + j}.parquet"
         s.to_parquet(OUT_DIR / name, index=False)
-        print(f"  {name:38s} {tag:12s} mediane {np.median(pv):5.0f} s  "
-              f"moyenne {pv.mean():5.0f} s  max {pv.max():7.0f} s")
+        print(f"  {name:38s} {tag:12s} median {np.median(pv):5.0f} s  "
+              f"mean {pv.mean():5.0f} s  max {pv.max():7.0f} s")
         print(f"    .\\mc.exe cp submissions\\{name} dc26/prc-2026-{TEAM_V17}/")
 
 
 
 
 # ----------------------------------------------------------------------------
-# Mode rapide : un seul entrainement du premier etage, pas de correcteur,
-# pas de ranking. Pour comparer des jeux de features sans payer sept fits.
+# Fast mode: a single training of the first stage, no corrector,
+# no ranking. To compare feature sets without paying for seven fits.
 # ----------------------------------------------------------------------------
 
 ABERRANT_S = 20000.0
@@ -2647,7 +2647,7 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
     train, val = dep[~is_val].copy(), dep[is_val].copy()
     if sample:
         train = train.sample(frac=sample, random_state=SEED)
-        print("echantillonnage : %.0f %% du train, %d lignes" % (100 * sample, len(train)))
+        print("sampling: %.0f %% of the training set, %d rows" % (100 * sample, len(train)))
     print("Train %d / val %d" % (len(train), len(val)))
 
     seeds = [SEED, 7, 123, 2024, 31337][:max(1, n_seeds)]
@@ -2655,7 +2655,7 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
     for k, sd in enumerate(seeds):
         SEED = sd
         if len(seeds) > 1:
-            print("  graine %d/%d (seed=%d)..." % (k + 1, len(seeds), sd), flush=True)
+            print("  seed %d/%d (seed=%d)..." % (k + 1, len(seeds), sd), flush=True)
         mdl = fit_stage1_grouped(train)
         vv = predict_stage1_grouped(mdl, val)
         preds.append(vv["mix"].values)
@@ -2663,7 +2663,7 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
             v = vv
     if len(preds) > 1:
         for k, pk in enumerate(preds):
-            print("    graine %d seule : RMSE %.2f s"
+            print("    seed %d alone: RMSE %.2f s"
                   % (k + 1, np.sqrt(np.mean((pk - v[TARGET].values) ** 2))))
     pred = np.mean(preds, axis=0)
     y = v[TARGET].values
@@ -2672,18 +2672,18 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
 
     print("")
     print("=" * 68)
-    print("EVALUATION RAPIDE sur janvier + juillet 2025")
+    print("FAST EVALUATION on January + July 2025")
     print("=" * 68)
     print("RMSE global        : %.2f s" % np.sqrt(sq.mean()))
-    print("RMSE voie propre   : %.2f s  (%d lignes aberrantes exclues)"
+    print("clean-lane RMSE    : %.2f s  (%d aberrant rows excluded)"
           % (np.sqrt(sq[clean].mean()), int((~clean).sum())))
     for mo in VAL_MONTHS:
         m = v["month"].values == mo
-        print("  mois %-2d : global %8.2f s   propre %8.2f s"
+        print("  month %-2d: global %8.2f s   clean %8.2f s"
               % (mo, np.sqrt(sq[m].mean()), np.sqrt(sq[m & clean].mean())))
 
     print("")
-    print("%-6s %9s %11s %12s %9s" % ("", "n", "RMSE", "RMSE propre", "part MSE"))
+    print("%-6s %9s %11s %12s %9s" % ("", "n", "RMSE", "clean RMSE", "MSE share"))
     apt = v["ADEP_mvt"].astype(str).values
     rows = []
     for a in np.unique(apt):
@@ -2696,11 +2696,11 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
     for a, n, r, rc, sh in sorted(rows, key=lambda z: -z[3]):
         print("%-6s %9d %9.1f s %10.1f s %7.1f %%" % (a, n, r, rc, sh))
 
-    # ventilation croisee aeroport x mois, en voie propre
+    # airport x month breakdown, on the clean lane
     print("")
-    print("voie propre, RMSE par aeroport et par mois :")
+    print("clean lane, RMSE per airport and per month:")
     print("%-6s %9s %10s %10s %9s %9s"
-          % ("", "n janv", "janvier", "juillet", "ecart", "part MSE"))
+          % ("", "n Jan", "January", "July", "gap", "MSE share"))
     mo_v = v["month"].values
     tot_c = float(sq[clean].sum())
     crossed = []
@@ -2715,12 +2715,12 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
         crossed.append((a, int(m1.sum()), r1, r7, r7 - r1, share))
     for a, n1, r1, r7, d, share in sorted(crossed, key=lambda z: -z[4]):
         print("%-6s %9d %8.1f s %8.1f s %+8.1f s %7.1f %%" % (a, n1, r1, r7, d, share))
-    print("  l'ecart est la degradation de juillet par rapport a janvier ;")
-    print("  la part de MSE dit combien chaque aeroport pese dans l'erreur propre.")
+    print("  the gap is the degradation of July compared with January;")
+    print("  the MSE share tells how much each airport weighs in the clean error.")
 
     if USE_CATBOOST and "mu_cat" in v.columns and v["mu_cat"].notna().any():
         print("")
-        print("balayage du poids CatBoost (sans reentrainement) :")
+        print("sweep of the CatBoost weight (no retraining):")
         sched_v = v["delta_mvt_sched_s"].values
         okv = np.isfinite(sched_v)
         pgv = np.where(okv, v["p_c"].values ** GAMMA, 0.0)
@@ -2731,48 +2731,48 @@ def main_fast(sample=None, rounds_scale=1.0, n_seeds=1):
             mixw = np.maximum(pgv * np.where(okv, sched_v, 0.0) + (1 - pgv) * muw,
                               TAXI_MIN_S)
             sqw = (mixw - y) ** 2
-            print("  poids %.2f : global %8.2f s   propre %8.2f s"
+            print("  weight %.2f: global %8.2f s   clean %8.2f s"
                   % (w, np.sqrt(sqw.mean()), np.sqrt(sqw[clean].mean())))
 
     sq_c = np.sort(sq[clean])[::-1]
     print("")
-    print("concentration de l'erreur sur la voie propre :")
+    print("concentration of the error on the clean lane:")
     for frac in (0.0001, 0.001, 0.01, 0.1):
         k = max(int(len(sq_c) * frac), 1)
-        print("  les %6.2f %% pires (%6d lignes) portent %5.1f %% du MSE propre"
+        print("  the %6.2f %% worst (%6d rows) carry %5.1f %% of the clean MSE"
               % (100 * frac, k, 100 * sq_c[:k].sum() / sq_c.sum()))
     err = np.abs(pred[clean] - y[clean])
-    print("  erreur absolue : mediane %5.0f s, p90 %5.0f s, p99 %6.0f s, max %7.0f s"
+    print("  absolute error: median %5.0f s, p90 %5.0f s, p99 %6.0f s, max %7.0f s"
           % (np.median(err), np.percentile(err, 90), np.percentile(err, 99), err.max()))
 
 
 
 def main_submit():
-    """Va directement au ranking : pas de plis hors-fold, pas de correcteur,
-    pas d'evaluation. Pour produire une soumission quand la configuration a
-    deja ete mesuree en mode rapide."""
+    """Goes directly to the ranking: no out-of-fold folds, no corrector,
+    no evaluation. To produce a submission when the configuration has
+    already been measured in fast mode."""
     dep = load_or_build(CACHE_PATH)
     rank_path = DATA_DIR / "ranking.parquet"
     subm_path = DATA_DIR / "submitting.parquet"
     if not rank_path.exists():
         sys.exit("ranking.parquet introuvable")
-    print("premier etage sur les 12 mois, %d departs" % len(dep))
+    print("first stage on the 12 months, %d departures" % len(dep))
     rdep = build_all(pd.read_parquet(rank_path))
     r = fit_predict_seeds(dep, rdep, label="ranking")
     pv = r["mix"].values
-    print("predictions : mediane %.0f s, moyenne %.0f s, max %.0f s"
+    print("predictions: median %.0f s, mean %.0f s, max %.0f s"
           % (np.median(pv), pv.mean(), pv.max()))
     tpl = pd.read_parquet(subm_path).drop(columns=[TARGET], errors="ignore")
     out = tpl.merge(pd.DataFrame({"MVT_ID_mvt": r["MVT_ID_mvt"].values, "pred": pv}),
                     on="MVT_ID_mvt", how="left")
     if out["pred"].isna().any():
         n_na = int(out["pred"].isna().sum())
-        print("attention : %d identifiants sans prediction, remplis par la mediane" % n_na)
+        print("warning: %d identifiers without prediction, filled with the median" % n_na)
         out["pred"] = out["pred"].fillna(float(np.median(dep[TARGET])))
     out[TARGET] = out["pred"]
     name = "%s_v%d.parquet" % (TEAM_V17, START_V_V17)
     out[["MVT_ID_mvt", TARGET]].to_parquet(OUT_DIR / name, index=False)
-    print("ecrit : %s (%d lignes)" % (name, len(out)))
+    print("written: %s (%d rows)" % (name, len(out)))
     print("  mc.exe cp submissions/%s dc26/prc-2026-%s/" % (name, TEAM_V17))
 
 
@@ -2783,44 +2783,44 @@ def main_submit():
 def main():
     ap = argparse.ArgumentParser(description="PRC 2026 - taxi-out v19")
     ap.add_argument("--fast", action="store_true",
-                    help="un seul entrainement, pas de correcteur ni de soumission")
+                    help="a single training run, no corrector and no submission")
     ap.add_argument("--sample", type=float, default=None,
-                    help="fraction du train a echantillonner en mode rapide, ex 0.3")
+                    help="fraction of the training set to sample in fast mode, e.g. 0.3")
     ap.add_argument("--no-month", action="store_true",
-                    help='retire "month" des features numeriques')
+                    help='removes "month" from the numerical features')
     ap.add_argument("--demand", action="store_true",
-                    help="active les features de file de demande (refutees en holdout 2025)")
+                    help="enables the demand-queue features (refuted on the 2025 holdout)")
     ap.add_argument("--degraded", action="store_true",
-                    help="active les features de journee degradee")
+                    help="enables the degraded-day features")
     ap.add_argument("--following", action="store_true",
-                    help="active le contexte posterieur (decollages suivants)")
+                    help="enables the posterior context (following takeoffs)")
     ap.add_argument("--neighbor", action="store_true",
-                    help="active le voisinage de poste, aeroport et arrivees")
+                    help="enables the stand, airport and arrival neighborhood")
     ap.add_argument("--all-context", action="store_true",
-                    help="equivaut a --following --neighbor")
+                    help="equivalent to --following --neighbor")
     ap.add_argument("--rounds-scale", type=float, default=1.0,
-                    help="multiplicateur du nombre d'arbres du premier etage, ex 4")
+                    help="multiplier of the number of trees of the first stage, e.g. 4")
     ap.add_argument("--seeds", type=int, default=1,
-                    help="nombre de graines moyennees a poids egaux (mode rapide et complet)")
+                    help="number of seeds averaged with equal weights (fast and full modes)")
     ap.add_argument("--submit-only", action="store_true",
-                    help="va directement au ranking, sans plis ni evaluation")
+                    help="goes directly to the ranking, without folds or evaluation")
     ap.add_argument("--model-cache", action="store_true",
-                    help="reutilise les modeles deja entraines pour la meme configuration")
+                    help="reuses the models already trained for the same configuration")
     ap.add_argument("--per-airport", action="store_true",
-                    help="un modele par aeroport suffisamment represente")
+                    help="one model per sufficiently represented airport")
     ap.add_argument("--cat-rounds", type=int, default=1200,
-                    help="iterations CatBoost du regresseur principal")
+                    help="CatBoost iterations of the main regressor")
     ap.add_argument("--cat-weight", type=float, default=0.5,
-                    help="poids de CatBoost dans l'ensemble, 0 = LightGBM seul")
+                    help="weight of CatBoost in the ensemble, 0 = LightGBM only")
     ap.add_argument("--per-runway", action="store_true",
-                    help="avec --per-airport : un modele par couple aeroport-piste")
+                    help="with --per-airport: one model per airport-runway pair")
     ap.add_argument("--clf-global", action="store_true",
-                    help="avec --per-airport : garde le classifieur global, "
-                         "regresseurs par aeroport")
+                    help="with --per-airport: keeps the global classifier, "
+                         "per-airport regressors")
     ap.add_argument("--catboost", action="store_true",
-                    help="ensemble CatBoost + LightGBM a poids egaux")
+                    help="CatBoost + LightGBM ensemble with equal weights")
     ap.add_argument("--clf-lean", action="store_true",
-                    help="retire les features de contexte du classifieur de corruption")
+                    help="removes the context features from the corruption classifier")
     args = ap.parse_args()
 
     global USE_DEMAND, USE_DEGRADED, USE_FOLLOWING, USE_NEIGHBOR, CLF_LEAN, CACHE_PATH, NUM_FEATURES, CAT_FEATURES
@@ -2865,17 +2865,17 @@ def main():
     tag = ("v19" + ("_nomonth" if args.no_month else "")
            + ("_demand" if USE_DEMAND else "") + ("_degraded" if USE_DEGRADED else ""))
     CACHE_PATH = DATA_DIR / ("dep_features_cache_%s.parquet" % tag)
-    print("configuration : %s%s" % (tag, "  [mode rapide]" if args.fast else ""))
-    print('  "month" : %s' % ("non" if args.no_month else "oui"))
-    print("  file de demande : %s" % ("oui" if USE_DEMAND else "non"))
-    print("  journee degradee : %s" % ("oui" if USE_DEGRADED else "non"))
-    print("  contexte posterieur : %s" % ("oui" if USE_FOLLOWING else "non"))
-    print("  voisinage/aeroport/arrivees : %s" % ("oui" if USE_NEIGHBOR else "non"))
-    print("  classifieur allege : %s" % ("oui" if CLF_LEAN else "non"))
-    print("  modeles par aeroport : %s%s"
-          % ("oui" if USE_PER_AIRPORT else "non",
-             " (classifieur global)" if (USE_PER_AIRPORT and CLF_GLOBAL) else ""))
-    print("  ensemble CatBoost : %s" % ("oui" if USE_CATBOOST else "non"))
+    print("configuration: %s%s" % (tag, "  [fast mode]" if args.fast else ""))
+    print('  "month": %s' % ("no" if args.no_month else "yes"))
+    print("  demand queue: %s" % ("yes" if USE_DEMAND else "no"))
+    print("  degraded day: %s" % ("yes" if USE_DEGRADED else "no"))
+    print("  posterior context: %s" % ("yes" if USE_FOLLOWING else "no"))
+    print("  neighborhood/airport/arrivals: %s" % ("yes" if USE_NEIGHBOR else "no"))
+    print("  lean classifier: %s" % ("yes" if CLF_LEAN else "no"))
+    print("  per-airport models: %s%s"
+          % ("yes" if USE_PER_AIRPORT else "no",
+             " (global classifier)" if (USE_PER_AIRPORT and CLF_GLOBAL) else ""))
+    print("  CatBoost ensemble: %s" % ("yes" if USE_CATBOOST else "no"))
     print("  cache : %s" % CACHE_PATH.name)
 
     if args.fast:
@@ -2888,10 +2888,10 @@ def main():
 
     if USE_DEGRADED:
         print("")
-        print("Controle de remplissage des features de journee degradee :")
+        print("Fill-rate check of the degraded-day features:")
         dd = pd.read_parquet(CACHE_PATH, columns=[c for c in DEGRADED_NUM])
         for c in DEGRADED_NUM:
-            print("  %-22s renseignee sur %5.1f %%   mediane %6.2f"
+            print("  %-22s filled for %5.1f %%   median %6.2f"
                   % (c, 100 * dd[c].notna().mean(), dd[c].median()))
 
 
