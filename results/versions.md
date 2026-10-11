@@ -34,7 +34,7 @@ values are only comparable to each other from v4 onwards (see note in 1).
 \* Validation on filtered data (taxi > 7,200 s removed), not comparable with later versions.
 
 Best production version of the first campaign: **v30**
-(`src/prc_experiment.py`, submission `motivated-ostrich_v31`, public
+(`legacy/prc_experiment.py`, submission `motivated-ostrich_v31`, public
 327.70 s with the reconstruction rule of section 6, 329.41 s without). The
 second campaign (section 6) supersedes it at 319.21 s.
 
@@ -111,7 +111,7 @@ leaderboard was.
 
 ### 3.3 The v30 re-engineering: +6.4 s public from protocol, not modelling
 
-`src/prc_experiment.py` keeps the exact v16
+`legacy/prc_experiment.py` keeps the exact v16
 architecture (two-regime mixture, p^0.75, A/B regressors, out-of-fold
 encodings) and changes the engineering around it:
 
@@ -191,7 +191,7 @@ section 7 for the updated reading of the remaining gap.
 
 The first campaign optimised a two-regime mixture through feature
 engineering. The second merged `pipeline.py` (v16) and
-`stacking_experiment.py` (v17) into a single file, `src/taxiout_v19.py`, and
+`stacking_experiment.py` (v17) into a single file, `legacy/taxiout_v19.py`, and
 attacked the problem from the architecture side instead. Submission ids below
 are the actual `motivated-ostrich_vNN.parquet` files, which is the only
 unambiguous key; the first campaign's internal version names (v2 to v30) are
@@ -327,3 +327,45 @@ around 200 s against our 260. The gap is therefore in the ordinary taxi, not
 in the artifacts. And LFPG, which looked like a problem airport at 577 s,
 falls to 254 s once two rows are removed, whereas LIRF stays at 557 s with
 structured estimators doing no better there than a constant.
+
+## 8. Third campaign: the generalist final model (8 to 10 October 2026)
+
+The organisers announced a blind final ranking on a new file (January,
+February, June and July 2026). The pipeline was rewritten from scratch as
+`src/taxiout_general.py`, dropping every component whose setting had been
+chosen or confirmed on the leaderboard (Rome branch, exponent 0.75, LIRF-only
+hard rule, posterior features, CatBoost weight from the second campaign).
+All choices are made on a selection fold (April + October 2025) and scored
+once on a control fold (January + July 2025).
+
+### 8.1 Structural finding: the LOBT window
+
+`|BLOCK - LOBT| <= 3606 s` on 100 % of the 2,062,251 matched departures of
+2025. Hence (a) every prediction can be projected on
+`[MVT - LOBT - 3606, MVT - LOBT + 3606]`, and (b) a substituted off-block is
+impossible when `|SCHED - LOBT| > 3606 s` (13,869 holdout rows, 0
+substitutions). Applied after the fact to the v15 holdout predictions:
+345.0 to 336.7 s.
+
+### 8.2 Results
+
+| Configuration | Selection (Apr + Oct) | Control (Jan + Jul) | Control, clean lane |
+|---|---|---|---|
+| XGBoost only | 221.92 | 355.00 | 271.70 |
+| Per-airport XGBoost (regressor A) | 221.44 | 354.15 | 270.59 |
+| CatBoost | 217.22 | 348.99 | 263.65 |
+| Selected: 0.75 CatBoost + 0.25 per-airport, g = 0.9 | **216.06** | **348.29** | **262.76** |
+| Selected, without the unmatched-movement rule | 222.40 | 392.55 | |
+| Selected, without rule and LOBT projection | 223.71 | 397.87 | |
+
+For reference, the second-campaign best (v26) scored 356.60 / 259.19 on the
+same holdout. Final submission: `motivated-ostrich_final.parquet`, trained on
+all of 2025 with three seeds (median prediction 949 s).
+
+### 8.3 Refuted in the third campaign
+
+| Idea | Result |
+|---|---|
+| Recalibration on EUROCONTROL's monthly taxi-out series | Model airport-month means already within 20 s of the truth; the series differs by up to 166 s in winter. -0.7 s (half shift) to -3.1 s (full shift) out of time |
+| Co-occurrence of date-rollover bugs between arrivals and departures (`src/cooccur.py`) | Nearest buggy arrival 27 h or more from any buggy departure; placebo at +/- 7 days identical |
+| A large architectural gain on the provided data | Error decomposition: 40 % of the MSE in 26 aberrant rows, 40 % in the normal lane (measurement noise), 15 % in unmatched rows (oracle bound 10 points). No remaining lever of the size of the earlier ones without external observations |
