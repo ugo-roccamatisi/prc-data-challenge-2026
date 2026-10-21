@@ -11,3 +11,9 @@ paper/*.pdf
 paper/*.fls
 paper/*.fdb_latexmk
 paper/*.synctex.gz
+paper/report/*.aux
+paper/report/*.log
+paper/report/*.out
+paper/report/*.fls
+paper/report/*.fdb_latexmk
+paper/report/*.synctex.gz

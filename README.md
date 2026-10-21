@@ -15,6 +15,12 @@ fold and a separate control fold. The earlier, partly leaderboard-tuned
 pipelines are kept in [`legacy/`](legacy/) and documented in
 [`results/versions.md`](results/versions.md).
 
+> **Evaluated version.** The commit evaluated by the organisers is the last
+> one before the deadline of 14 October 2026, tagged `challenge-deadline`
+> (`d0ad7e6`, 11 October 2026). Later commits only tidy the repository
+> (duplicate legacy scripts removed from `src/`) and add the updated report;
+> the code of the final model is unchanged.
+
 ## At a glance
 
 | | |
@@ -241,13 +247,17 @@ python src/cooccur.py --data data                 # arrival/departure co-occurre
 │   └── 03_kaggle_taxiout_general.ipynb   # final pipeline as a Kaggle notebook
 ├── results/versions.md            # experiment log, all campaigns
 ├── legacy/                        # earlier pipelines (v16 to v26), kept for traceability
-├── paper/                         # report and figures of the second campaign
+├── paper/
+│   ├── report/                    # report (PDF and LaTeX source) on the final model
+│   ├── figures/                   # figures used in the report
+│   └── fig5_lobt_window.py        # regenerates the matching-window figure
 ├── requirements.txt
 └── LICENSE
 ```
 
-The report in `paper/report/` describes the second-campaign pipeline (v26),
-not the final model; this README is the reference for the final submission.
+The report [`paper/report/prc_challenge_2026_report.pdf`](paper/report/prc_challenge_2026_report.pdf)
+describes the final model, the analysis of the target behind it and the
+earlier campaigns.
 
 ## Limitations
 
@@ -260,8 +270,10 @@ not the final model; this README is the reference for the final submission.
 - The unmatched-movement rule depends on the frequency of an airport-side
   defect, mostly at LIRF. Its gain varies widely between months.
 - The clean-lane gap to the earlier v26 pipeline (3.6 s) is most likely the
-  posterior sequence features (take-offs after the target flight), which we
-  left out because they have no operational meaning.
+  dedicated posterior sequence features of the second campaign (burst
+  position, departures behind the flight that had already pushed back), which
+  we left out because they have no operational meaning. The symmetric traffic
+  and climate windows of the final model still include some later movements.
 
 ## A note on leaderboard probing
 
